@@ -92,6 +92,14 @@ class FLNLHelper
             spdlog::info("Initialised network communication server ({}:{}) for M2 robot (state size: {})", ip, port, stateValues.size());
         }
 
+
+        /**
+        * \brief Is a client currently connected?
+        */
+        bool isConnected() {
+            return FLNLServer.IsConnected();
+        }
+        
         /**
         * \brief Close existing connection
         */
