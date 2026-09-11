@@ -1,122 +1,177 @@
-#this script generates reference signals for the simulation
-
 #!/usr/bin/env python3
 """
-Fitts' law 1D reaching task — ID-balanced trial schedule.
+Fitts' law 1D reaching task — trial schedule from hard-coded conditions.
+
+Input
+-----
+CONDITIONS: an explicit list of (A, W, ID) tuples.
+
+The declared ID is the grouping key: conditions sharing an ID value form one ID
+level. Nothing is inferred, so there is no clustering tolerance and no rounding
+heuristic to tune.
+
+The Shannon ID is still computed from A and W (ID = log2(A/W + 1)) and checked
+against the declared value. A mismatch beyond ID_CHECK_TOL raises, which is what
+catches a mistyped A, W, or ID before it silently corrupts the design.
 
 Design
 ------
-A x W crossing yields 12 conditions collapsing onto 6 distinct Shannon IDs
-(1 / 2 / 3 / 3 / 2 / 1 cells per ID).
-
-Allocation rule
----------------
-  * every ID appears exactly TRIALS_PER_ID_PER_ROUND times in every round
-  * every round therefore has  n_IDs * TRIALS_PER_ID_PER_ROUND  trials
-  * within an ID, its constituent (A, W) cells split that ID's trials as
-    evenly as possible, and the split ROTATES across rounds so that each
-    cell ends up with exactly the same total over the whole session
-
-Rotation
---------
-With k cells sharing an ID and n trials per round, base, rem = divmod(n, k).
-Round r gives base+1 trials to cells {r, r+1, ..., r+rem-1} (mod k) and base
-to the rest. Over R rounds each cell is bumped R*rem/k times, so all cells
-finish with base*R + R*rem/k trials. Exact whenever R*rem is divisible by k.
+  * every condition appears REPS times in total, split evenly across N_GROUPS
+  * condition balance forces ID balance exactly, provided every ID level holds
+    the same number of conditions (checked below)
 
 Output
 ------
-One CSV per round/group with columns: index (1..N global), A, W, ID.
+One CSV per group plus a combined file, columns: index, A, W, ID.
 """
 
 import numpy as np
 import pandas as pd
 from pathlib import Path
 
-# ----------------------------------------------------------------- settings
-A_LEVELS = np.array([8.0, 12.0, 18.0, 27.0])
-W_LEVELS = np.array([2.0, 2.0 / 1.5, 2.0 / 1.5 / 1.5])
+# --------------------------------------------------------------- conditions
+# (A, W, ID) — ID is the declared grouping label.
+# Widths are exact fractions: 4/3 and 8/9, not 1.333 and 0.889. Truncated
+# widths shift the computed ID in the 4th decimal and break the match check.
+CONDITIONS = [
+    (12.0,     2.0,   2.8074),
+    ( 8.0,     4/3,   2.8074),
+    (15.0,     2.5,   2.8074),
 
-TRIALS_PER_ID_PER_ROUND = 5
-N_ROUNDS                = 6
-MAX_RUN                 = 1      # max consecutive trials of the same cell
-AVOID_ID_REPEAT         = False  # also forbid consecutive trials at same ID
-SEED                    = 2026
+    (18.0,     2.0,   3.3219),
+    (12.0,     4/3,   3.3219),
+    ( 8.0,     8/9,   3.3219),
+
+    (27.0,     2.0,   3.8580),
+    (18.0,     4/3,   3.8580),
+    (12.0,     8/9,   3.8580),
+
+    (27.0,     4/3,   4.4094),
+    (18.0,     8/9,   4.4094),
+    (20.25,    1.0,   4.4094),
+
+    (27.0,     8/9,   4.9715),
+    (30.375,   1.0,   4.9715),
+    (15.1875,  0.5,   4.9715),
+]
+
+# ----------------------------------------------------------------- settings
+REPS         = 12      # trials per condition, over the whole session
+N_GROUPS     = 4       # groups to split into
+
+ID_DECIMALS  = 4       # rounding for the ID written to the CSV
+ID_CHECK_TOL = 0.01    # bits; max allowed |declared ID - computed ID|
+ID_OUTPUT    = "given" # "given" -> the declared ID (one value per level)
+                       # "calc"  -> the computed ID, rounded to ID_DECIMALS
+
+MAX_RUN         = 1      # max consecutive trials of the same condition
+AVOID_ID_REPEAT = False  # also forbid consecutive trials at the same ID
+SEED            = 2026
 
 OUT_DIR = Path("schedule")
-PREFIX  = "group"
+PREFIX  = "bal_group"
 
 
 # ------------------------------------------------------------- construction
-def build_conditions(a_levels, w_levels, decimals=9):
-    rows = [
-        {"A": a, "W": w, "ratio": a / w, "ID": np.log2(a / w + 1.0)}
-        for a in a_levels
-        for w in w_levels
-    ]
-    df = pd.DataFrame(rows).sort_values(["ID", "A"]).reset_index(drop=True)
-    key = df["ID"].round(decimals)
-    levels = np.sort(key.unique())
-    df["ID_level"] = key.map({v: i for i, v in enumerate(levels)})
-    df.insert(0, "cell", np.arange(len(df)))
-    return df
+def build_conditions(conditions, decimals=ID_DECIMALS, tol=ID_CHECK_TOL):
+    if not conditions:
+        raise ValueError("CONDITIONS is empty")
+    for i, c in enumerate(conditions):
+        if len(c) != 3:
+            raise ValueError(f"condition {i}: expected (A, W, ID), got {c}")
+
+    df = pd.DataFrame(conditions, columns=["A", "W", "ID_given"]).astype(float)
+
+    if (df.A <= 0).any() or (df.W <= 0).any():
+        raise ValueError("A and W must all be positive")
+    bad = df.A <= df.W / 2
+    if bad.any():
+        raise ValueError(f"A sits inside the target for condition(s) "
+                         f"{df.index[bad].tolist()}")
+    if df.duplicated(subset=["A", "W"]).any():
+        dup = df[df.duplicated(subset=["A", "W"], keep=False)]
+        raise ValueError(f"duplicate (A, W) conditions:\n{dup.to_string()}")
+
+    # --- computed ID, checked against the declared one --------------------
+    df["ID_calc"] = np.log2(df.A / df.W + 1.0)
+    df["err"] = (df.ID_calc - df.ID_given).abs()
+    off = df.err > tol
+    if off.any():
+        raise ValueError(
+            f"declared ID disagrees with log2(A/W+1) by more than {tol} bits:\n"
+            + df.loc[off, ["A", "W", "ID_given", "ID_calc", "err"]]
+                .round(6).to_string())
+
+    # --- levels come from the DECLARED ID --------------------------------
+    df = df.sort_values(["ID_given", "A"]).reset_index(drop=True)
+    levels = np.sort(df.ID_given.unique())
+    df["ID_level"] = df.ID_given.map({v: i for i, v in enumerate(levels)})
+    df["ID_nominal"] = df.ID_given
+    df["ID"] = (df.ID_given if ID_OUTPUT == "given"
+                else df.ID_calc).round(decimals)
+    df.insert(0, "cond", np.arange(len(df)))
+
+    print("CONDITIONS")
+    show = df[["cond", "A", "W", "ID_given", "ID_calc", "err", "ID",
+               "ID_level"]].copy()
+    show["ID_level"] += 1
+    print(show.round(6).to_string(index=False))
+
+    sizes = df.groupby("ID_level").size()
+    print(f"\n  {len(df)} conditions -> {len(sizes)} ID levels, "
+          f"sizes {sizes.tolist()}")
+    print(f"  max |declared - computed| = {df.err.max():.6f} bits "
+          f"(tolerance {tol})")
+    if sizes.nunique() != 1:
+        print("  ! ID levels hold different numbers of conditions; balancing "
+              "conditions will NOT balance IDs")
+
+    if len(levels) > 1:
+        print(f"  smallest gap between ID levels = {np.diff(levels).min():.4f} bits")
+
+    split = df.groupby("ID_level")["ID"].nunique()
+    if (split > 1).any():
+        print(f"\n  ! WARNING: {int((split > 1).sum())} ID level(s) write more "
+              f"than one value to the ID column at {decimals} dp.")
+        for lvl, g in df.groupby("ID_level"):
+            if g.ID.nunique() > 1:
+                print(f"      level {lvl+1}: {sorted(g.ID.unique())}")
+        print("    Grouping and balancing use the declared ID, so the schedule "
+              "is correct.\n    Set ID_OUTPUT = 'given' for one value per level.")
+
+    return df.drop(columns=["err"])
 
 
-def check_feasible(cond_df, n_per_round, n_rounds):
-    """Report, per ID, whether the rotation closes exactly."""
+def check_feasible(cond_df, reps, n_groups, max_run):
+    n_cond = len(cond_df)
+    total = n_cond * reps
     print(f"\n{'-'*70}\nALLOCATION")
-    print(f"  {n_per_round} trials per ID per round x {n_rounds} rounds "
-          f"= {n_per_round*n_rounds} trials per ID")
-    print(f"  {cond_df.ID_level.nunique()} IDs -> "
-          f"{cond_df.ID_level.nunique()*n_per_round} trials/round, "
-          f"{cond_df.ID_level.nunique()*n_per_round*n_rounds} total\n")
+    print(f"  {n_cond} conditions x {reps} reps = {total} trials")
+
+    if reps % n_groups:
+        print(f"  ! {reps} reps does not divide into {n_groups} groups")
+        return False
+    per_group = total // n_groups
+    per_cond = reps // n_groups
+    print(f"  {n_groups} groups of {per_group} trials")
+    print(f"  per group: {per_cond} trials per condition")
+
     ok = True
-    for lvl, grp in cond_df.groupby("ID_level"):
-        k = len(grp)
-        base, rem = divmod(n_per_round, k)
-        bumps = n_rounds * rem
-        exact = (bumps % k == 0)
-        per_cell = base * n_rounds + bumps // k
-        split = f"{base+1}" * 0  # placeholder
-        pattern = ("/".join(str(base + 1) for _ in range(rem))
-                   + ("/" if rem and rem < k else "")
-                   + "/".join(str(base) for _ in range(k - rem)))
-        print(f"  ID {grp.ID.iloc[0]:6.4f} | {k} cell(s) | per round {pattern}"
-              f" | per cell total {per_cell}"
-              f" | {'exact' if exact else 'NOT EXACT — totals will differ by 1'}")
-        ok &= exact
-    if not ok:
-        print("\n  ! rotation does not close; adjust N_ROUNDS or "
-              "TRIALS_PER_ID_PER_ROUND")
+    for lvl, g in cond_df.groupby("ID_level"):
+        print(f"    ID {g.ID_nominal.iloc[0]:.4f} | {len(g)} condition(s)"
+              f" | {len(g)*per_cond} trials per group | {len(g)*reps} total")
+    if cond_df.groupby("ID_level").size().nunique() != 1:
+        ok = False
+
+    if per_cond > max_run * (per_group - per_cond + 1):
+        print(f"  ! MAX_RUN={max_run} unsatisfiable")
+        ok = False
     return ok
-
-
-def allocate(cond_df, n_per_round, n_rounds, rng):
-    """
-    counts[round, cell] — trials of each cell in each round.
-    Row block per ID sums to n_per_round; each cell's column sums to its target.
-    """
-    counts = np.zeros((n_rounds, len(cond_df)), dtype=int)
-    for lvl, grp in cond_df.groupby("ID_level"):
-        cells = grp["cell"].to_numpy()
-        cells = cells[rng.permutation(len(cells))]      # randomise which cell
-        k = len(cells)                                  # takes which rotation slot
-        base, rem = divmod(n_per_round, k)
-        offset = int(rng.integers(k))                   # randomise phase
-        for r in range(n_rounds):
-            counts[r, cells] += base
-            if rem:
-                bumped = [(offset + r * rem + i) % k for i in range(rem)]
-                counts[r, cells[bumped]] += 1
-    return counts
 
 
 # --------------------------------------------------------------- sequencing
 def shuffle_constrained(labels, keys, max_run, rng, max_iter=50_000):
-    """
-    Permute `labels` so no value in `keys` (aligned with labels) repeats more
-    than max_run times in a row. `keys` lets us constrain on cell or on ID.
-    """
+    """Permute so no value in `keys` repeats more than max_run times in a row."""
     idx = np.arange(len(labels))
     for _ in range(400):
         idx = rng.permutation(idx)
@@ -128,73 +183,79 @@ def shuffle_constrained(labels, keys, max_run, rng, max_iter=50_000):
                 return labels[idx]
             i = int(bad[rng.integers(len(bad))])
             j = int(rng.integers(len(idx)))
-            if i == j:
-                continue
-            idx[[i, j]] = idx[[j, i]]
+            if i != j:
+                idx[[i, j]] = idx[[j, i]]
     raise RuntimeError("constraints too tight — relax MAX_RUN / AVOID_ID_REPEAT")
 
 
-def build_schedule(cond_df, counts, max_run, avoid_id_repeat, rng):
-    cell_to_id = cond_df.set_index("cell")["ID_level"].to_dict()
-    rows, last_cell, last_id = [], None, None
+def build_schedule(cond_df, reps, n_groups, max_run, avoid_id_repeat, rng):
+    per_cond = reps // n_groups
+    cond_to_id = cond_df.set_index("cond")["ID_level"].to_dict()
+    rows, last_cond, last_id = [], None, None
 
-    for r in range(counts.shape[0]):
-        pool = np.repeat(np.arange(counts.shape[1]), counts[r])
-        keys = (np.array([cell_to_id[c] for c in pool])
+    for g in range(n_groups):
+        pool = np.repeat(cond_df["cond"].to_numpy(), per_cond)
+        keys = (np.array([cond_to_id[c] for c in pool])
                 if avoid_id_repeat else pool.copy())
         for _ in range(300):
             order = shuffle_constrained(pool, keys, max_run, rng)
-            head_ok = (last_cell is None or order[0] != last_cell)
+            head_ok = (last_cond is None or order[0] != last_cond)
             if avoid_id_repeat:
-                head_ok &= (last_id is None or cell_to_id[order[0]] != last_id)
+                head_ok &= (last_id is None or cond_to_id[order[0]] != last_id)
             if head_ok:
                 break
-        last_cell, last_id = order[-1], cell_to_id[order[-1]]
+        last_cond, last_id = order[-1], cond_to_id[order[-1]]
         for k, c in enumerate(order, start=1):
-            rows.append({"group": r + 1, "trial_in_group": k, "cell": int(c)})
+            rows.append({"group": g + 1, "trial_in_group": k, "cond": int(c)})
 
     sched = pd.DataFrame(rows)
     sched.insert(0, "index", np.arange(1, len(sched) + 1))
-    return sched.merge(cond_df, on="cell", how="left")
+    return sched.merge(cond_df, on="cond", how="left")
 
 
 # --------------------------------------------------------------- validation
-def validate(sched, cond_df, n_per_round, max_run):
+def validate(sched, cond_df, reps, n_groups, max_run):
     print(f"\n{'-'*70}\nVALIDATION")
     ok = True
+    n = len(sched)
+    per_cond = reps // n_groups
+    per_id = per_cond * cond_df.groupby("ID_level").size().iloc[0]
 
-    per = pd.crosstab(sched.ID.round(4), sched.group)
-    print("  trials per ID, by group (target "
-          f"{n_per_round} everywhere):")
-    print(per.to_string())
-    hit = bool((per.values == n_per_round).all())
+    ct = pd.crosstab(sched.cond, sched.group)
+    print(f"  trials per condition, by group (target {per_cond} everywhere): "
+          f"min {ct.values.min()}, max {ct.values.max()}  "
+          f"{'OK' if (ct.values == per_cond).all() else 'FAIL'}")
+    ok &= bool((ct.values == per_cond).all())
+    tot = sched.groupby("cond").size()
+    print(f"  trials per condition, total (target {reps}): "
+          f"{tot.min()}-{tot.max()}  {'OK' if tot.eq(reps).all() else 'FAIL'}")
+    ok &= bool(tot.eq(reps).all())
+
+    it = pd.crosstab(sched.ID_nominal, sched.group)
+    print(f"\n  trials per ID, by group (target {per_id} everywhere):")
+    print(it.to_string())
+    hit = bool((it.values == per_id).all())
     print(f"  -> {'OK' if hit else 'FAIL'}")
     ok &= hit
 
-    print("\n  trials per (A, W) cell over all 180 trials:")
-    tot = sched.groupby(["ID", "A", "W"]).size().rename("n").reset_index()
-    for lvl, grp in tot.groupby("ID"):
-        vals = grp.n.tolist()
-        flag = "equal" if len(set(vals)) == 1 else f"UNEVEN {vals}"
-        cells = ", ".join(f"({a:.0f},{w:.3f})={n}"
-                          for a, w, n in zip(grp.A, grp.W, grp.n))
-        print(f"    ID {lvl:6.4f}: {cells}   [{flag}]")
-        ok &= len(set(vals)) == 1
+    sizes = sched.groupby("group").size()
+    print(f"\n  group sizes: {sorted(sizes)}  "
+          f"{'OK' if sizes.nunique() == 1 else 'FAIL'}")
+    ok &= sizes.nunique() == 1
 
-    n = len(sched)
-    print(f"\n  temporal spread — mean index per cell (uniform = {(n+1)/2:.1f}):")
-    for lvl, grp in sched.groupby("ID"):
-        parts = " ".join(
-            f"({a:.0f},{w:.3f}):{m:5.1f}"
-            for (a, w), m in grp.groupby(["A", "W"])["index"].mean().items())
-        print(f"    ID {lvl:6.4f}: {parts}")
-    drift = np.corrcoef(sched.ID, sched["index"])[0, 1]
+    print(f"\n  temporal spread — mean index per condition "
+          f"(uniform = {(n+1)/2:.1f}):")
+    for lvl, g in sched.groupby("ID_level"):
+        parts = " ".join(f"({a:g},{w:.4g}):{m:5.1f}" for (a, w), m
+                         in g.groupby(["A", "W"])["index"].mean().items())
+        print(f"    ID {g.ID_nominal.iloc[0]:.4f}: {parts}")
+    drift = np.corrcoef(sched.ID_calc, sched["index"])[0, 1]
     print(f"\n  corr(ID, trial index) = {drift:+.4f}  "
           f"{'OK' if abs(drift) < 0.05 else 'CHECK'}")
 
-    runs = (sched.cell != sched.cell.shift()).cumsum()
+    runs = (sched.cond != sched.cond.shift()).cumsum()
     longest = int(sched.groupby(runs).size().max())
-    print(f"  longest run of one cell: {longest} (cap {max_run})  "
+    print(f"  longest run of one condition: {longest} (cap {max_run})  "
           f"{'OK' if longest <= max_run else 'FAIL'}")
     ok &= longest <= max_run
 
@@ -206,30 +267,26 @@ def validate(sched, cond_df, n_per_round, max_run):
 if __name__ == "__main__":
     rng = np.random.default_rng(SEED)
 
-    cond_df = build_conditions(A_LEVELS, W_LEVELS)
-    print("CONDITIONS")
-    print(cond_df.assign(ID_level=cond_df.ID_level + 1)
-                 .round(4).to_string(index=False))
-
-    if not check_feasible(cond_df, TRIALS_PER_ID_PER_ROUND, N_ROUNDS):
+    cond_df = build_conditions(CONDITIONS)
+    if not check_feasible(cond_df, REPS, N_GROUPS, MAX_RUN):
         raise SystemExit(1)
 
-    counts = allocate(cond_df, TRIALS_PER_ID_PER_ROUND, N_ROUNDS, rng)
-    sched = build_schedule(cond_df, counts, MAX_RUN, AVOID_ID_REPEAT, rng)
-    validate(sched, cond_df, TRIALS_PER_ID_PER_ROUND, MAX_RUN)
+    sched = build_schedule(cond_df, REPS, N_GROUPS, MAX_RUN,
+                           AVOID_ID_REPEAT, rng)
+    validate(sched, cond_df, REPS, N_GROUPS, MAX_RUN)
 
     OUT_DIR.mkdir(exist_ok=True)
     out = sched[["index", "A", "W", "ID"]].copy()
     out["A"] = out["A"].round(4)
     out["W"] = out["W"].round(6)
-    out["ID"] = out["ID"].round(4)
+    out["ID"] = out["ID"].round(ID_DECIMALS)
 
     print(f"\n{'-'*70}\nFILES")
     for g, grp in sched.groupby("group"):
         path = OUT_DIR / f"{PREFIX}_{g}.csv"
         out.loc[grp.index].to_csv(path, index=False)
-        lo, hi = grp["index"].min(), grp["index"].max()
-        print(f"  {path}  {len(grp)} trials  index {lo}-{hi}")
+        print(f"  {path}  {len(grp)} trials  "
+              f"index {grp['index'].min()}-{grp['index'].max()}")
 
     allpath = OUT_DIR / f"{PREFIX}_all.csv"
     out.to_csv(allpath, index=False)
@@ -237,4 +294,3 @@ if __name__ == "__main__":
 
     print(f"\nfirst 10 rows of {PREFIX}_1.csv:")
     print(out.head(10).to_string(index=False))
-
