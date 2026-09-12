@@ -21,11 +21,11 @@
  ******************************************************************************/
 static const double kDefaultWarmup[5][3] = {
     // A (cm),  W (cm),     ID (bits)
-    {12.0, 2.000000, 2.8074},
-    {12.0, 1.333333, 3.3219},
-    {18.0, 1.333333, 3.8580},
-    {20.25, 1.000000, 4.4094},
-    {27.0, 0.888889, 4.9715},
+    {12.0, 2.000000, 2.807},
+    {12.0, 1.333333, 3.322},
+    {18.0, 1.333333, 3.858},
+    {20.25, 1.000000, 4.409},
+    {30.375, 1.000000, 4.972},
 };
 
 /******************************************************************************
@@ -67,7 +67,7 @@ static bool toDouble(const std::string &s, double &v) {
 }
 
 //! Fixed precision number, with empty measures written as NaN (read as NA by R/pandas)
-static std::string num(double v, int prec = 4) {
+static std::string num(double v, int prec = 3) {
     if (std::isnan(v)) return "NaN";
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%.*f", prec, v);
