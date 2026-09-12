@@ -1,0 +1,42 @@
+# M2FittsMachine run parameters (effective values after YAML overrides)
+created: 2026-09-11T19:02:39
+app_build: Sep 11 2026 18:44:11
+config_file: /home/nle/Fitts/CANOpenRobotController/config/M2FittsMachine.yaml
+trials_csv: /home/nle/Fitts/CANOpenRobotController/schedule/bal_group_all.csv
+trials_csv_fnv1a64: dfa0e36f69960a9
+trials_csv_header: index,A,W,ID
+trials_count: 180
+trials.file: /home/nle/Fitts/CANOpenRobotController/schedule/bal_group_all.csv
+trials.d_column: B
+trials.w_column: C
+trials.units_to_m: 0.01
+trials.expected_rows: 180
+trials.start_trial: 1
+task.home_m: [0.4, 0.2]
+task.direction: -1
+task.tolerance_factor: 0.5
+task.dwell_time_s: 1
+task.acquisition_timeout_s: 5
+task.onset_speed_mps: 0.01
+home_settling.tolerance_m: 0.005
+home_settling.rest_speed_mps: 0.005
+home_settling.rest_time_s: 0.5
+home_settling.settle_timeout_s: 10
+home_settling.return_ref_speed_mps: 0.1
+home_settling.homing_ref_speed_mps: 0.05
+pd.kp_N_per_m: [1400, 3200]
+pd.kd_Ns_per_m: [125, 100]
+pd.f_max_N: 25
+pd.velocity_filter_hz: 0
+pd.friction_compensation: true
+safety.max_speed_mps: 1.2
+safety.workspace_x_m: [0, 0.625]
+safety.workspace_y_m: [0, 0.44]
+safety.workspace_tolerance_m: 0.01
+safety.target_margin_m: 0.02
+safety.brake_damping_Ns_per_m: 40
+calibration.force_N: 20
+calibration.damping_Ns_per_m: 3
+calibration.still_speed_mps: 0.005
+calibration.still_time_s: 1
+logging.folder: logs

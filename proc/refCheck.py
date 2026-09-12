@@ -6,7 +6,7 @@ import pandas as pd
 #csv_file = r"C:\Users\YourName\Documents\data.csv"
 
 # For Linux/macOS, for example:
-csv_file = "schedule/bal_group_4.csv"
+csv_file = "schedule/bal_group_1.csv"
 
 
 # =========================

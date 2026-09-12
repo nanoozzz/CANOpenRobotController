@@ -7,7 +7,10 @@ from scipy.stats import linregress
 # USER SETTINGS
 # ============================================================
 
-csv_path = r"C:\Users\NLe\Downloads\M2Fitts_20260911_184728_trials.csv"
+csv_path = r"logs/M2Fitts_20260911_190239_trials.csv"
+
+# Number of decimal places used to group similar IDs
+ID_DECIMALS = 3
 
 # ============================================================
 # LOAD DATA
@@ -18,26 +21,50 @@ df = pd.read_csv(csv_path)
 # Keep only the columns we need
 df = df[["ID_shannon_bits", "mt_final_entry_s"]].copy()
 
-# Convert to numeric
-df["ID_shannon_bits"] = pd.to_numeric(df["ID_shannon_bits"], errors="coerce")
-df["mt_final_entry_s"] = pd.to_numeric(df["mt_final_entry_s"], errors="coerce")
+# ============================================================
+# CONVERT TO NUMERIC
+# ============================================================
 
-# Remove rows with missing values
+df["ID_shannon_bits"] = pd.to_numeric(
+    df["ID_shannon_bits"],
+    errors="coerce"
+)
+
+df["mt_final_entry_s"] = pd.to_numeric(
+    df["mt_final_entry_s"],
+    errors="coerce"
+)
+
+# Remove rows with missing/invalid values
 df = df.dropna()
 
 # ============================================================
-# GROUP BY ID_SHANNON
+# GROUP SIMILAR IDs
 # ============================================================
 
-# Mean entry time for each ID
+# Round ID to 3 decimal places BEFORE grouping
+#
+# Example:
+#   3.3217 -> 3.322
+#   3.3218 -> 3.322
+#   3.3219 -> 3.322
+#
+# Therefore they are treated as the same ID.
+
+df["ID_shannon_bits"] = df["ID_shannon_bits"].round(ID_DECIMALS)
+
+# ============================================================
+# GROUP BY ID
+# ============================================================
+
 grouped = (
     df.groupby("ID_shannon_bits")["mt_final_entry_s"]
       .agg(["mean", "std", "count"])
       .reset_index()
 )
 
-print("\nGrouped data:")
-print(grouped)
+print("\n================ Grouped Data ================")
+print(grouped.to_string(index=False))
 
 # ============================================================
 # LINEAR REGRESSION
@@ -45,6 +72,12 @@ print(grouped)
 
 x = grouped["ID_shannon_bits"].values
 y = grouped["mean"].values
+
+# Check that there are enough unique IDs
+if len(x) < 2:
+    raise ValueError(
+        "Not enough unique ID_shannon_bits values for linear regression."
+    )
 
 result = linregress(x, y)
 
@@ -55,14 +88,12 @@ r_squared = r_value ** 2
 p_value = result.pvalue
 std_err = result.stderr
 
-# Predicted values
-y_fit = slope * x + intercept
-
 # ============================================================
-# PRINT STATISTICS
+# PRINT REGRESSION STATISTICS
 # ============================================================
 
 print("\n================ Regression Statistics ================")
+
 print(f"Slope       = {slope:.6f}")
 print(f"Intercept   = {intercept:.6f}")
 print(f"R           = {r_value:.6f}")
@@ -71,7 +102,10 @@ print(f"p-value     = {p_value:.6e}")
 print(f"Std. Error  = {std_err:.6f}")
 
 print("\nRegression equation:")
-print(f"mt_final_entry_s = {slope:.6f} × ID_shannon_bits + {intercept:.6f}")
+print(
+    f"mt_final_entry_s = "
+    f"{slope:.6f} × ID_shannon_bits + {intercept:.6f}"
+)
 
 # ============================================================
 # PLOT
@@ -79,7 +113,10 @@ print(f"mt_final_entry_s = {slope:.6f} × ID_shannon_bits + {intercept:.6f}")
 
 plt.figure(figsize=(10, 6))
 
-# Individual data points
+# ------------------------------------------------------------
+# Individual measurements
+# ------------------------------------------------------------
+
 plt.scatter(
     df["ID_shannon_bits"],
     df["mt_final_entry_s"],
@@ -87,16 +124,27 @@ plt.scatter(
     label="Individual measurements"
 )
 
+# ------------------------------------------------------------
 # Group means
+# ------------------------------------------------------------
+
 plt.scatter(
     grouped["ID_shannon_bits"],
     grouped["mean"],
-    s=60,
+    s=70,
     label="Mean per ID"
 )
 
+# ------------------------------------------------------------
 # Regression line
-x_line = np.linspace(x.min(), x.max(), 200)
+# ------------------------------------------------------------
+
+x_line = np.linspace(
+    x.min(),
+    x.max(),
+    200
+)
+
 y_line = slope * x_line + intercept
 
 plt.plot(
@@ -120,19 +168,29 @@ equation_text = (
 
 plt.text(
     0.05,
-    0.95,
+    0.65,
     equation_text,
     transform=plt.gca().transAxes,
     verticalalignment="top",
-    bbox=dict(boxstyle="round", alpha=0.8)
+    bbox=dict(
+        boxstyle="round",
+        alpha=0.8
+    )
 )
 
-plt.xlabel("ID_shannon_bits")
+# ============================================================
+# LABELS / FORMATTING
+# ============================================================
+
+plt.xlabel("ID Shannon (bits)")
 plt.ylabel("Entry time (s)")
-plt.title("Entry Time vs ID")
+plt.title("Entry Time vs ID Shannon")
 
 plt.grid(True, alpha=0.3)
 plt.legend()
-plt.tight_layout()
 
+plt.tight_layout()
 plt.show()
+
+save_path = csv_path.replace(".csv", "_regression_plot.png")
+plt.savefig(save_path, dpi=300)

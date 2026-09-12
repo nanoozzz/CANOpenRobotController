@@ -84,7 +84,7 @@ struct FittsConfig {
     double calib_still_speed = 0.005;               //!< [m/s]
     double calib_still_time = 1.0;                  //!< [s]
     // Output
-    std::string log_folder = "logs";                //!< Relative to the working directory of the app
+    std::string log_folder = "../logs";                //!< Relative to the working directory of the app
 
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 };
