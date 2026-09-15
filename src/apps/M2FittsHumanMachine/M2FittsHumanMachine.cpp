@@ -13,11 +13,10 @@
  * Default warm-up table
  *
  * Protocol: "2 rounds x 5 ID = 10 reps (each ID is shown once using the exact same
- * condition, e.g. ID 3.858 is shown by (A,W) = (18,1.33) only)".
- * The five IDs of the design are each realised by three (A,W) pairs; the default below
- * uses the *middle amplitude* of each triplet, which reproduces the (18, 1.333) example
- * given for ID 3.858. Override it by placing a warmup.csv (same format as bal_group_*.csv)
- * in the trials directory.
+ * condition)". NOTE: this built-in table is a fallback only. It realises the five IDs with
+ * *different* (A,W) pairs than schedule/warmup.csv shipped with the Unity project, and warm-up
+ * amplitude exposure is not neutral with respect to Block 1. Always provide warmup.csv in the
+ * trials directory so that a single table is used, and check the log line printed by loadWarmup().
  ******************************************************************************/
 static const double kDefaultWarmup[5][3] = {
     // A (cm),  W (cm),     ID (bits)
@@ -26,6 +25,14 @@ static const double kDefaultWarmup[5][3] = {
     {18.0, 1.333333, 3.858},
     {20.25, 1.000000, 4.409},
     {30.375, 1.000000, 4.972},
+};
+
+//! Config file locations tried in order (the first one that opens wins).
+static const char *kConfigCandidates[] = {
+    "config/M2FittsHuman.conf",
+    "config/M2FittsHumanMachine.cfg",
+    "../config/M2FittsHuman.conf",
+    "../config/M2FittsHumanMachine.cfg",
 };
 
 /******************************************************************************
@@ -81,6 +88,10 @@ static bool calibrationDone(StateMachine &SM) {
     return SM.state<M2FittsCalibState>("CalibState")->isCalibDone();
 }
 
+static bool uiAvailable(StateMachine &SM) {
+    return SM.state<M2FittsWaitUIState>("WaitUIState")->isUIReady();
+}
+
 static bool readyToStartTrial(StateMachine &SM) {
     M2FittsHumanMachine &sm = static_cast<M2FittsHumanMachine &>(SM);
     return sm.state<M2FittsReadyState>("ReadyState")->isReady() && !sm.sessionFinished();
@@ -117,7 +128,7 @@ static bool abortRequested(StateMachine &SM) {
  ******************************************************************************/
 M2FittsHumanMachine::M2FittsHumanMachine() {
     //Optional run-time configuration (participant, paths, geometry, timings...)
-    loadConfig("config/M2FittsHuman.conf");
+    loadConfig();
     applyConfig();
 
     //Create an M2 Robot and set it to generic state machine
@@ -125,6 +136,7 @@ M2FittsHumanMachine::M2FittsHumanMachine() {
 
     //Create state instances and add to the State Machine
     addState("CalibState", std::make_shared<M2FittsCalibState>(robot(), this));
+    addState("WaitUIState", std::make_shared<M2FittsWaitUIState>(robot(), this));
     addState("StandbyState", std::make_shared<M2FittsStandbyState>(robot(), this));
     addState("ReadyState", std::make_shared<M2FittsReadyState>(robot(), this));
     addState("ReachState", std::make_shared<M2FittsReachState>(robot(), this));
@@ -133,14 +145,18 @@ M2FittsHumanMachine::M2FittsHumanMachine() {
     addState("EndState", std::make_shared<M2FittsEndState>(robot(), this));
 
     //Define transitions between states. Order matters: the first active transition of a state is used.
-    addTransition("CalibState", &calibrationDone, "ReadyState");
+    //Calibration -> wait for the Unity client -> protocol. The wait state is transparent and is
+    //skipped immediately when ui_required = false (mouse-free bench testing without the UI).
+    addTransition("CalibState", &calibrationDone, "WaitUIState");
+    addTransition("WaitUIState", &uiAvailable, "ReadyState");
     addTransition("ReadyState", &readyToStartTrial, "ReachState");
     addTransition("ReachState", &trialOver, "ReturnState");
     addTransition("ReturnState", &returnedAndSessionOver, "EndState");
     addTransition("ReturnState", &returnedAndBreakDue, "BreakState");
     addTransition("ReturnState", &returned, "ReachState");
     addTransition("BreakState", &breakOver, "ReadyState");
-    //Manual abort (keyboard 'x') from any state: registered last so that it never pre-empts a normal transition
+    //Manual abort (keyboard 'x' or UI ABRT) from any state: registered last so that it never
+    //pre-empts a normal transition
     addTransitionFromAny(&abortRequested, "StandbyState");
 
     setInitState("CalibState");
@@ -153,22 +169,33 @@ M2FittsHumanMachine::~M2FittsHumanMachine() {
 /******************************************************************************
  * Configuration
  ******************************************************************************/
-bool M2FittsHumanMachine::loadConfig(const std::string &file) {
+bool M2FittsHumanMachine::loadConfigFile(const std::string &file) {
     std::ifstream f(file);
-    if (!f.is_open()) {
-        spdlog::info("M2FittsHuman: no config file ({}), using built-in defaults.", file);
-        return false;
-    }
+    if (!f.is_open()) return false;
+
     std::string line;
     while (std::getline(f, line)) {
         line = trimStr(line);
         if (line.empty() || line[0] == '#' || line[0] == ';') continue;
         size_t eq = line.find('=');
         if (eq == std::string::npos) continue;
-        cfg_[normaliseName(line.substr(0, eq))] = trimStr(line.substr(eq + 1));
+        //Strip any trailing in-line comment from the value
+        std::string value = trimStr(line.substr(eq + 1));
+        size_t hash = value.find('#');
+        if (hash != std::string::npos) value = trimStr(value.substr(0, hash));
+        cfg_[normaliseName(line.substr(0, eq))] = value;
     }
     spdlog::info("M2FittsHuman: loaded {} parameters from {}.", cfg_.size(), file);
     return true;
+}
+
+bool M2FittsHumanMachine::loadConfig() {
+    for (const char *candidate : kConfigCandidates) {
+        if (loadConfigFile(candidate)) return true;
+    }
+    spdlog::warn("M2FittsHuman: no config file found (tried config/M2FittsHuman.conf and "
+                 "config/M2FittsHumanMachine.cfg, also one level up). Using built-in defaults.");
+    return false;
 }
 
 std::string M2FittsHumanMachine::cfgStr(const std::string &key, const std::string &def) const {
@@ -196,6 +223,10 @@ void M2FittsHumanMachine::applyConfig() {
     logDir_ = cfgStr("results_dir", logDir_);
     serverIP_ = cfgStr("ip", serverIP_);
     serverPort_ = cfgInt("port", serverPort_);
+
+    uiRequired_ = cfgBool("ui_required", uiRequired_);
+    uiDivider_ = std::max(1, cfgInt("ui_stream_divider", uiDivider_));
+    displayGain_ = cfgDbl("display_gain", displayGain_);
 
     params_.originX = cfgDbl("origin_x", params_.originX);
     params_.originY = cfgDbl("origin_y", params_.originY);
@@ -226,6 +257,12 @@ void M2FittsHumanMachine::applyConfig() {
     params_.nRounds = cfgInt("n_rounds", params_.nRounds);
     params_.trialsPerRound = cfgInt("trials_per_round", params_.trialsPerRound);
     params_.warmupRepeats = cfgInt("warmup_repeats", params_.warmupRepeats);
+
+    if (std::fabs(displayGain_ - 1.0) > 1e-9)
+        spdlog::warn("M2FittsHuman: display_gain = {} (non-unity). The visual amplitude no longer "
+                     "equals the movement amplitude, so the *visual* index of difficulty differs "
+                     "from the mechanical one. Only set this if a gain manipulation is intended.",
+                     displayGain_);
 
     //Session tag: <participant>_B<block>_<yyyymmdd-HHMMSS>, used for both output files
     std::time_t t = std::time(nullptr);
@@ -348,7 +385,10 @@ bool M2FittsHumanMachine::loadWarmup() {
             t.ID_bits = c[2];
             conditions.push_back(t);
         }
-        spdlog::info("M2FittsHuman: using the built-in warm-up table ({} conditions).", conditions.size());
+        spdlog::warn("M2FittsHuman: {} not found - falling back on the BUILT-IN warm-up table "
+                     "({} conditions). This table does not match the one shipped with the Unity "
+                     "project; provide warmup.csv so that a single table is used.",
+                     file, conditions.size());
     }
 
     //warmupRepeats rounds, each presenting every warm-up condition once (in increasing ID order)
@@ -397,6 +437,12 @@ bool M2FittsHumanMachine::checkTrialTable() {
                          xNear, xFar, xMin, xMax);
         ok = false;
     }
+    //The off-origin return point must also be reachable
+    double xAway = params_.originX + params_.taskDirection * params_.returnOffset;
+    if (xAway > xMax || xAway < xMin) {
+        spdlog::critical("M2FittsHuman: return position {:.3f} m is outside the usable travel.", xAway);
+        ok = false;
+    }
     if (params_.originY < 0.02 || params_.originY > 0.42)
         spdlog::warn("M2FittsHuman: origin_y = {:.3f} m is close to the y stops ([0, 0.440] m).", params_.originY);
 
@@ -431,7 +477,7 @@ bool M2FittsHumanMachine::openResultsFile() {
                     "MT_s,RT_s,MT_move_s,t_first_entry_s,n_entries,"
                     "x_entry_cm,x_sel_cm,v_peak_ms,success,"
                     "return_time_s,return_timeout,return_abort,"
-                    "dwell_s,t_onset_s,t_end_s\n";
+                    "dwell_s,t_onset_s,t_end_s,ui_connected\n";
     resultsFile_.flush();
     spdlog::info("M2FittsHuman: trial results -> {}", file);
     return true;
@@ -448,7 +494,8 @@ void M2FittsHumanMachine::writeResultRow(const FittsTrialResult &r) {
                  << num(r.x_entry_cm, 4) << "," << num(r.x_sel_cm, 4) << "," << num(r.v_peak, 4) << ","
                  << (r.success ? 1 : 0) << ","
                  << num(r.returnTime, 4) << "," << (r.returnTimeout ? 1 : 0) << "," << (r.returnAbort ? 1 : 0) << ","
-                 << num(params_.dwellTime, 3) << "," << num(r.t_onset, 4) << "," << num(r.t_end, 4) << "\n";
+                 << num(params_.dwellTime, 3) << "," << num(r.t_onset, 4) << "," << num(r.t_end, 4) << ","
+                 << (ui.connected() ? 1 : 0) << "\n";
     resultsFile_.flush();  //written trial by trial: an interrupted session keeps all completed trials
 }
 
@@ -522,24 +569,40 @@ void M2FittsHumanMachine::printSummary() {
 /******************************************************************************
  * UI and inputs
  ******************************************************************************/
+std::vector<double> M2FittsHumanMachine::sessionDescriptor() const {
+    //Field order is part of the wire protocol: see M2FittsHumanMachine.h and FittsProtocol.cs.
+    return {(double)M2FITTS_PROTOCOL_VERSION,
+            (double)block_,
+            (double)params_.nRounds,
+            (double)params_.trialsPerRound,
+            (double)warmupTrials_.size(),
+            params_.originX,
+            params_.originY,
+            params_.taskDirection,
+            params_.dwellTime,
+            params_.maxTrialTime,
+            params_.originTolerance,
+            params_.returnOffset,
+            params_.useYChannel ? 1. : 0.,
+            displayGain_};
+}
+
 void M2FittsHumanMachine::sendUI(const std::string &cmd, const std::vector<double> &params) {
-    if (UIserver != nullptr) UIserver->sendCmd(cmd, params);
+    ui.send(cmd, params);
+}
+
+void M2FittsHumanMachine::sendUIContext(const std::string &cmd, const std::vector<double> &params) {
+    ui.sendContext(cmd, params);
 }
 
 bool M2FittsHumanMachine::goSignal() {
     if (robot()->keyboard->getS() || robot()->keyboard->getNb() == 1) return true;
     if (robot()->joystick->isButtonPressed(1)) return true;
-    if (UIserver != nullptr) {
-        if (UIserver->isCmd("GTNS") || UIserver->isCmd("STRT") || UIserver->isCmd("SKIP")) {
-            UIserver->sendCmd("OK");
-            return true;
-        }
-    }
-    return false;
+    return ui.consumeGo();
 }
 
 bool M2FittsHumanMachine::abortSignal() {
-    return robot()->keyboard->getX();
+    return robot()->keyboard->getX() || ui.consumeAbort();
 }
 
 /******************************************************************************
@@ -581,8 +644,54 @@ void M2FittsHumanMachine::init() {
         logHelper.add(logTrialNb_, "Trial");
         logHelper.add(logTargetX_, "TargetX (m)");
         logHelper.add(logHalfWidth_, "TargetHalfWidth (m)");
+        logHelper.add(logDwell_, "DwellProgress");
+        //Display-side markers, mirrored from the link in hwStateUpdate() so that UI events can be
+        //related to the kinematics offline. They must be non-const lvalues: see the note in the header.
+        logHelper.add(logMarkCode_, "UIMarkCode");
+        logHelper.add(logMarkTime_, "UIMarkClientTime (s)");
+        logHelper.add(logMarkServerTime_, "UIMarkServerTime (s)");
         logHelper.startLogger();
-        UIserver = std::make_shared<FLNLHelper>(*robot(), serverIP_, serverPort_);
+
+        UIserver = std::make_shared<FLNLHelper>(*robot(), "0.0.0.0");
+
+        //---------------------------------------------------------------- UI link
+        //IMPORTANT: the state vector is registered explicitly here rather than through the
+        //FLNLHelper(RobotM2&,...) convenience constructor, because that constructor streams the
+        //helper's OWN clock (started at helper construction, i.e. after robot initialisation).
+        //That clock is offset by an unknown few hundred ms from the state machine clock used for
+        //t_onset/t_end in the results csv and for the Time column of the raw log, which makes
+        //offline alignment of display frames and kinematics impossible. Streaming runningTime()
+        //puts every record on one clock.
+        ui.setClock(&runningTime());
+        //ui.init(serverIP_, serverPort_, uiDivider_, uiRequired_);
+        //ui.registerState(runningTime());                    // [0]      t          (s)
+        //ui.registerState(robot()->getEndEffPosition());     // [1,2]    x, y       (m)
+        //ui.registerState(robot()->getEndEffVelocity());     // [3,4]    dx, dy     (m/s)
+        //ui.registerState(robot()->getInteractionForce());   // [5,6]    Fx, Fy     (N)
+        //ui.registerState(logState_);                        // [7]      state code
+        //ui.registerState(logPhase_);                        // [8]      phase
+        //ui.registerState(logTrialNb_);                      // [9]      trial index
+        //ui.registerState(logTargetX_);                      // [10]     target x   (m)
+        //ui.registerState(logHalfWidth_);                    // [11]     half width (m)
+        //ui.registerState(logDwell_);                        // [12]     dwell progress 0..1
+        if (!ui.init(
+            UIserver,
+            uiDivider_,
+            uiRequired_)) {
+
+            spdlog::critical(
+            "M2FittsHuman/UI: failed to initialise UI link.");
+
+            std::raise(SIGTERM);
+            return;
+        }
+        ui.setSession(sessionDescriptor());
+        //spdlog::info("Registered 13 UI state values");
+        spdlog::info(
+            "M2FittsHuman/UI: using existing UIserver.");
+
+        spdlog::info(
+            "M2FittsHuman/UI: expected state vector = 13 values.");
     } else {
         spdlog::critical("Failed robot initialisation. Exiting...");
         std::raise(SIGTERM);  //Clean exit
@@ -595,15 +704,43 @@ void M2FittsHumanMachine::end() {
         resultsFile_.close();
     }
     printSummary();
-    if (running() && UIserver != nullptr) UIserver->closeConnection();
+    if (running()) ui.close();
     StateMachine::end();
 }
 
 void M2FittsHumanMachine::hwStateUpdate(void) {
     StateMachine::hwStateUpdate();
-    //Values streamed in the continuous log (updated here so that every logged sample is tagged)
+    //Values streamed in the continuous log and to the UI (updated here so that every logged
+    //sample and every streamed frame is tagged consistently)
     logPhase_ = (double)phase_;
     logTrialNb_ = (double)currentTrial_.index;
-    //Also send robot state over network
-    if (UIserver != nullptr) UIserver->sendState();
+    //Mirror the latest display marker so that it is captured by the logger (which holds plain
+    //double pointers, hence the copy rather than a reference into the link)
+    logMarkCode_ = ui.markCode();
+    logMarkTime_ = ui.markTime();
+    logMarkServerTime_ = ui.markServerTime();
+
+    auto now = std::chrono::steady_clock::now();
+    static auto lastCheck = std::chrono::steady_clock::now();
+    static bool connected = false;
+
+    if (UIserver && std::chrono::duration<double, std::milli>(now - lastCheck).count() > 1000.0) {
+        connected = UIserver->isConnected();
+        if (!connected) {
+            spdlog::warn("UI disconnected. Waiting for Unity...");
+            UIserver->reconnect(); 
+            connected = UIserver->isConnected();
+        }
+        lastCheck = now;
+    }
+
+    StateMachine::hwStateUpdate();
+
+    static auto lastSend = std::chrono::steady_clock::now();
+    if (connected && std::chrono::duration<double, std::milli>(now - lastSend).count() >= 25.0) {
+        UIserver->sendState();
+        lastSend = now;
+    }
+    //Connection monitoring, inbound commands, context replay and (decimated) state stream
+    ui.update();
 }

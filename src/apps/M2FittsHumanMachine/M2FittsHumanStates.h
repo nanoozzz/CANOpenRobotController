@@ -5,17 +5,19 @@
  *
  * Trial cycle implemented here (one CORC state per phase of the cycle):
  *
- *   ReadyState  --go-->  ReachState  --trial over-->  ReturnState  --+--> ReachState   (next trial)
- *                             ^                                      |
- *                             |                                      +--> BreakState --> ReadyState
- *                             |                                      |
- *                             +--------------------------------------+--> EndState     (session over)
+ *   Calib -> WaitUI -> ReadyState --go--> ReachState --trial over--> ReturnState --+--> ReachState  (next trial)
+ *                           ^                                                      |
+ *                           |                                                      +--> BreakState --> ReadyState
+ *                           |                                                      |
+ *                           +------------------------------------------------------+--> EndState    (session over)
  *
  * All protocol data (trial table, indices, parameters, result logging) lives in
  * the M2FittsHumanMachine object; states only read/write it through the `sm` pointer.
+ * States never measure anything on the client side: every quantity that enters the analysis
+ * is computed here, on the control loop.
  *
- * \version 0.1
- * \date 2026-09-12
+ * \version 1.0
+ * \date 2026-09-15
  */
 
 #ifndef M2FITTSHUMANSTATES_H_DEF
@@ -41,7 +43,8 @@ enum FittsPhase {
     PHASE_DONE = 2     //!< Session complete
 };
 
-/** \brief Numeric state code streamed in the continuous (control-loop rate) log and to the UI. */
+/** \brief Numeric state code streamed in the continuous (control-loop rate) log and to the UI.
+ *  Mirrored by FittsStateCode in the Unity client (FittsProtocol.cs): keep the two in step. */
 enum FittsStateCode {
     ST_CALIB = 0,
     ST_STANDBY = 1,
@@ -49,7 +52,8 @@ enum FittsStateCode {
     ST_REACH = 3,
     ST_RETURN = 4,
     ST_BREAK = 5,
-    ST_END = 6
+    ST_END = 6,
+    ST_WAITUI = 7
 };
 
 /**
@@ -109,7 +113,7 @@ struct FittsParams {
     // --- Task geometry (robot frame; M2 workspace is x in [0, 0.625], y in [0, 0.440]) ---
     double originX = 0.40;        //!< Home/start position, x [m]
     double originY = 0.20;        //!< Home/start position, y [m]
-    double taskDirection = -1;   //!< +1: targets at increasing x; -1: decreasing x
+    double taskDirection = -1;    //!< +1: targets at increasing x; -1: decreasing x
     bool useYChannel = true;      //!< Virtual channel constraining off-axis (y) motion: makes the task 1D.
                                   //!< This is a task constraint, NOT assistance: it must be identical in Blocks 1 and 2.
     double channelK = 800.;       //!< Channel stiffness [N/m]
@@ -146,9 +150,6 @@ struct FittsParams {
 
 /**
  * \brief Base class of all M2FittsHuman states: gives access to the robot and to the owner machine.
- *
- * Note: unlike M2DemoStates, no banner is printed on entry/exit (the trial cycle enters
- * and exits states ~540 times per session; CORC already logs transitions through spdlog).
  */
 class M2FittsState : public State {
    protected:
@@ -186,6 +187,28 @@ class M2FittsCalibState : public M2FittsState {
     VM2 stop_reached_time;
     bool at_stop[2];
     bool calibDone = false;
+};
+
+/**
+ * \brief Hold (transparent) until the Unity client is connected and has completed the handshake.
+ *
+ * Without this state the protocol would start on calibration completion and the first target
+ * onsets would be sent into a socket with no client: the participant would be asked to reach
+ * towards targets that are never drawn. Skipped immediately when ui_required = false.
+ */
+class M2FittsWaitUIState : public M2FittsState {
+   public:
+    M2FittsWaitUIState(RobotM2 *M2, M2FittsHumanMachine *machine, const char *name = "M2 Fitts Wait UI") : M2FittsState(M2, machine, name){};
+
+    void entryCode(void);
+    void duringCode(void);
+    void exitCode(void);
+
+    bool isUIReady() { return ready_; }
+
+   private:
+    bool ready_ = false;
+    bool announced_ = false;
 };
 
 /**
@@ -233,6 +256,10 @@ class M2FittsReadyState : public M2FittsState {
  * The robot is transparent (mass + friction compensation, zero assistance) -- this is the
  * "no robot support" condition of Block 1. If useYChannel is set, a PD virtual channel holds
  * y at the origin so that the movement is one-dimensional along the task axis.
+ *
+ * Entry detection, dwell accumulation and all timing happen here, at control rate. The dwell
+ * progress is streamed (0..1) so that the client can draw an honest dwell indicator rather
+ * than re-deriving one at frame rate.
  */
 class M2FittsReachState : public M2FittsState {
    public:
@@ -328,9 +355,6 @@ class M2FittsEndState : public M2FittsState {
 
 /**
  * \brief Minimum jerk interpolation between X0 and Xf over T, evaluated at t.
- *
- * Same helper as M2DemoStates, with the velocity expression differentiated w.r.t. T rather
- * than t: mathematically identical but defined at t=0 (the demo version returns NaN there).
  * \return normalised time (1 when the movement is complete)
  */
 double JerkIt(VM2 X0, VM2 Xf, double T, double t, VM2 &Xd, VM2 &dXd);

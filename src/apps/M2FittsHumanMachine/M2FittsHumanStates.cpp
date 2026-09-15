@@ -41,6 +41,7 @@ static bool interactionForceTooHigh(RobotM2 *robot, const FittsParams &p) {
  ******************************************************************************/
 void M2FittsCalibState::entryCode(void) {
     sm->setLoggedState(ST_CALIB);
+    sm->setLoggedDwell(0.);
     calibDone = false;
     for (unsigned int i = 0; i < 2; i++) {
         stop_reached_time[i] = .0;
@@ -84,11 +85,54 @@ void M2FittsCalibState::exitCode(void) {
 }
 
 /******************************************************************************
+ * Wait for the Unity client
+ ******************************************************************************/
+void M2FittsWaitUIState::entryCode(void) {
+    sm->setLoggedState(ST_WAITUI);
+    robot->initTorqueControl();
+    robot->setEndEffForceWithCompensation(VM2::Zero(), true);
+    ready_ = false;
+    announced_ = false;
+
+    if (!sm->ui.required()) {
+        spdlog::info("M2FittsHuman: ui_required = false - starting without a display client.");
+        ready_ = true;
+        return;
+    }
+    std::cout << "\nWaiting for the Unity client to connect (and to send HELO)...\n"
+              << "The robot is transparent; nothing is recorded until the display is up." << std::endl;
+}
+
+void M2FittsWaitUIState::duringCode(void) {
+    robot->setEndEffForceWithCompensation(VM2::Zero(), true);
+
+    if (sm->uiReady()) {
+        if (!announced_) {
+            announced_ = true;
+            //Context command, so that it is replayed if the client reconnects before the first trial
+            sm->sendUIContext("WAIT");
+            std::cout << "Client connected." << std::endl;
+        }
+        ready_ = true;
+        return;
+    }
+
+    if (iterations() % 2500 == 1)  //~ every 5 s at a 2 ms control period
+        std::cout << "   still waiting for the client..." << std::endl;
+}
+
+void M2FittsWaitUIState::exitCode(void) {
+    robot->setEndEffForceWithCompensation(VM2::Zero());
+}
+
+/******************************************************************************
  * Standby: transparent, no task (abort target)
  ******************************************************************************/
 void M2FittsStandbyState::entryCode(void) {
     sm->setLoggedState(ST_STANDBY);
+    sm->setLoggedDwell(0.);
     robot->initTorqueControl();
+    sm->sendUIContext("STBY");
     spdlog::warn("M2FittsHuman: session interrupted - robot transparent. Completed trials are saved.");
 }
 
@@ -105,6 +149,7 @@ void M2FittsStandbyState::exitCode(void) {
  ******************************************************************************/
 void M2FittsReadyState::entryCode(void) {
     sm->setLoggedState(ST_READY);
+    sm->setLoggedDwell(0.);
     robot->initVelocityControl();
     robot->setEndEffVelocity(VM2::Zero());
 
@@ -117,9 +162,9 @@ void M2FittsReadyState::entryCode(void) {
     tAtOrigin_ = 0.;
     ready_ = false;
 
-    sm->sendUI("RDY!", {requireGo_ ? 1. : 0., Xorigin_(0), Xorigin_(1)});
+    sm->sendUIContext("RDY!", {requireGo_ ? 1. : 0., Xorigin_(0), Xorigin_(1)});
     if (requireGo_)
-        std::cout << "\nHold the handle. Press 's' (or joystick button 1, or send GTNS from the UI) to start.\n" << std::endl;
+        std::cout << "\nHold the handle. Press 's' (or joystick button 1, or the start control in the UI) to begin.\n" << std::endl;
     else
         std::cout << "Resuming in " << sm->p().readyHoldTime << " s (hold the handle at the start position)..." << std::endl;
 }
@@ -134,7 +179,7 @@ void M2FittsReadyState::duringCode(void) {
     if (status >= 1. && !atOrigin_) {
         atOrigin_ = true;
         tAtOrigin_ = running();
-        sm->sendUI("ORIG", {Xorigin_(0), Xorigin_(1)});
+        sm->sendUIContext("ORIG", {Xorigin_(0), Xorigin_(1)});
     }
 
     //Go on explicit signal, or automatically once held at the origin (between rounds)
@@ -153,6 +198,7 @@ void M2FittsReadyState::exitCode(void) {
  ******************************************************************************/
 void M2FittsReachState::entryCode(void) {
     sm->setLoggedState(ST_REACH);
+    sm->setLoggedDwell(0.);
 
     trial_ = sm->currentTrial();
     Xorigin_ = sm->originPosition();
@@ -175,10 +221,12 @@ void M2FittsReachState::entryCode(void) {
     res_.trial = trial_;
     res_.t_onset = sm->runningTime();
 
-    //Target onset (the UI draws the target from these parameters)
-    sm->sendUI("TRIA", {(double)sm->phase(), (double)trial_.round, (double)trial_.index,
-                        trial_.A_cm, trial_.W_cm, trial_.ID_bits,
-                        Xtarget_(0), Xtarget_(1), halfW_, Xorigin_(0), Xorigin_(1)});
+    //Target onset. Context command: replayed verbatim if the client reconnects mid-trial, so the
+    //display always shows the target that the robot side is actually scoring.
+    sm->sendUIContext("TRIA", {(double)sm->phase(), (double)trial_.round, (double)trial_.inRound,
+                               (double)trial_.index, trial_.A_cm, trial_.W_cm, trial_.ID_bits,
+                               Xtarget_(0), Xtarget_(1), halfW_, Xorigin_(0), Xorigin_(1),
+                               sm->p().dwellTime, sm->p().maxTrialTime});
 }
 
 void M2FittsReachState::duringCode(void) {
@@ -214,7 +262,12 @@ void M2FittsReachState::duringCode(void) {
     }
     inTarget_ = inside;
 
-    if (inside && (running() - tEntry_) >= sm->p().dwellTime) {
+    //Authoritative dwell progress (0..1), streamed so that the client can draw the dwell
+    //indicator from the same quantity that validates the trial.
+    const double dwell = sm->p().dwellTime;
+    sm->setLoggedDwell(inside && dwell > 0. ? std::min(1., (running() - tEntry_) / dwell) : 0.);
+
+    if (inside && (running() - tEntry_) >= dwell) {
         //Trial validated: MT is the time of the *final* entry, i.e. trial duration minus the dwell
         res_.success = true;
         res_.MT = tEntry_;
@@ -225,7 +278,7 @@ void M2FittsReachState::duringCode(void) {
         trialDone_ = true;
 
         sm->recordReach(res_);
-        sm->sendUI("HITT", {(double)trial_.index, res_.MT});
+        sm->sendUI("HITT", {(double)trial_.index, res_.MT, (double)res_.nEntries, res_.x_sel_cm});
         std::cout << (res_.phase == PHASE_WARMUP ? "[warm-up] " : "[block]   ")
                   << "trial " << std::setw(4) << trial_.index
                   << " | A=" << std::setw(8) << std::fixed << std::setprecision(4) << trial_.A_cm
@@ -248,6 +301,7 @@ void M2FittsReachState::duringCode(void) {
 }
 
 void M2FittsReachState::exitCode(void) {
+    sm->setLoggedDwell(0.);
     robot->setEndEffForceWithCompensation(VM2::Zero());
 }
 
@@ -256,6 +310,7 @@ void M2FittsReachState::exitCode(void) {
  ******************************************************************************/
 void M2FittsReturnState::entryCode(void) {
     sm->setLoggedState(ST_RETURN);
+    sm->setLoggedDwell(0.);
     Xorigin_ = sm->originPosition();
     Xaway_ = sm->returnPosition();
     dragTime_ = fittsNaN();
@@ -276,13 +331,13 @@ void M2FittsReturnState::gotoPhase(ReturnPhase p) {
             robot->initVelocityControl();
             Xi_ = X;
             T_ = std::max(sm->p().returnMinTime, (Xaway_ - Xi_).norm() / sm->p().returnSpeed);
-            sm->sendUI("RETN", {Xaway_(0), Xaway_(1)});
+            sm->sendUIContext("RETN", {Xaway_(0), Xaway_(1)});
             break;
 
         case DRAG:  //participant drags the handle back: self-paced inter-trial rest
             robot->initTorqueControl();
             robot->setEndEffForceWithCompensation(VM2::Zero(), true);
-            sm->sendUI("DRAG", {Xorigin_(0), Xorigin_(1), sm->p().originTolerance, sm->p().maxReturnTime});
+            sm->sendUIContext("DRAG", {Xorigin_(0), Xorigin_(1), sm->p().originTolerance, sm->p().maxReturnTime});
             break;
 
         case SNAP:  //robot positions the handle on the exact origin
@@ -292,7 +347,7 @@ void M2FittsReturnState::gotoPhase(ReturnPhase p) {
             break;
 
         case HOLD:  //held on the origin until the next target onset
-            sm->sendUI("ORIG", {Xorigin_(0), Xorigin_(1)});
+            sm->sendUIContext("ORIG", {Xorigin_(0), Xorigin_(1)});
             break;
     }
 }
@@ -375,14 +430,15 @@ void M2FittsReturnState::exitCode(void) {
  ******************************************************************************/
 void M2FittsBreakState::entryCode(void) {
     sm->setLoggedState(ST_BREAK);
+    sm->setLoggedDwell(0.);
     duration_ = sm->breakDuration();
     sm->clearBreakDue();
     over_ = false;
 
     robot->initTorqueControl();
     robot->setEndEffForceWithCompensation(VM2::Zero(), true);
-    sm->sendUI("REST", {duration_, (double)sm->trialsDone()});
-    std::cout << "\n--- Break: up to " << duration_ << " s. Press 's' (or send SKIP) to continue earlier. ---" << std::endl;
+    sm->sendUIContext("REST", {duration_, (double)sm->trialsDone(), (double)sm->phase()});
+    std::cout << "\n--- Break: up to " << duration_ << " s. Press 's' (or the skip control in the UI) to continue earlier. ---" << std::endl;
 }
 
 void M2FittsBreakState::duringCode(void) {
@@ -403,8 +459,9 @@ void M2FittsBreakState::exitCode(void) {
  ******************************************************************************/
 void M2FittsEndState::entryCode(void) {
     sm->setLoggedState(ST_END);
+    sm->setLoggedDwell(0.);
     robot->initTorqueControl();
-    sm->sendUI("ENDE", {(double)sm->trialsDone()});
+    sm->sendUIContext("ENDE", {(double)sm->trialsDone()});
     sm->printSummary();
     std::cout << "Block " << sm->blockNb() << " finished: " << sm->trialsDone()
               << " trials recorded. The robot is transparent - you can stop CORC (Ctrl-C)." << std::endl;

@@ -1,34 +1,62 @@
 /**
  * \file M2FittsHumanMachine.h
- * \brief Block 1 (no robot support) of the robot-guidance Fitts' law experiment on the M2.
+ * \brief Block 1 (no robot support) of the robot-guidance Fitts' law experiment on the M2,
+ *        with the Unity front-end driven over libFLNL.
  *
  * The app runs, for one participant:
- *      Warm-up (warmupRepeats x 5 IDs)  ->  Rest  ->  Block 1 (4 rounds x 45 trials, from csv)  ->  End
+ *      Wait for UI -> Warm-up (warmupRepeats x 5 IDs) -> Rest -> Block 1 (4 rounds x 45 trials) -> End
  * and writes one row per trial (trial #, A, W, ID, MT, ...) to a results csv, plus the usual
  * CORC control-loop-rate log of position/velocity/force.
  *
- * Trial list: data/M2FittsHuman/bal_group_1.csv ... bal_group_4.csv (columns index,A,W,ID; A and W in cm).
- * Warm-up list: data/M2FittsHuman/warmup.csv if present, otherwise the built-in default table
- *               (one canonical (A,W) per ID, see M2FittsHumanMachine.cpp).
+ * -----------------------------------------------------------------------------------------
+ * AUTHORITY
+ * -----------------------------------------------------------------------------------------
+ * CORC is the sole authority on the protocol AND on every measurement: trial order, target
+ * onset, entry/dwell detection, movement time, the 1D channel and all robot-driven motion are
+ * decided here, on the control loop. Unity renders what it is told and provides the participant
+ * interface; it performs no detection and no timing that enters the analysis. Any measurement
+ * made on the Unity side is sampled at frame rate (60-144 Hz, with vsync jitter) and carries
+ * display latency, which would bias movement time in a way that scales with the index of
+ * difficulty - i.e. it would contaminate the very slope the experiment estimates.
  *
- * Unity communication (libFLNL, see FLNLHelper):
- *   - continuous state stream: [time, x, y, dx, dy, Fx, Fy] (registered by the FLNLHelper M2 constructor)
- *   - commands sent to the UI (4 characters + parameters):
- *       "TRIA" [phase, round, trial#, A_cm, W_cm, ID, targetX, targetY, halfWidth, originX, originY]  target onset
- *       "HITT" [trial#, MT]              trial validated (dwell completed)
- *       "MISS" [trial#]                  trial timed out
- *       "RETN" [awayX, awayY]            robot is driving the handle off the origin
- *       "DRAG" [originX, originY, tol, maxTime]   participant must drag the handle back
- *       "ORIG" [originX, originY]        handle on the origin, next trial imminent
- *       "REST" [duration, roundDone]     break started
- *       "RDY!" [requireGo]               waiting at the origin for the go signal
- *       "ENDE" [nTrials]                 end of Block 1
- *   - commands accepted from the UI: "GTNS", "STRT" or "SKIP" (go / skip the current wait), acknowledged with "OK"
+ * -----------------------------------------------------------------------------------------
+ * UNITY COMMUNICATION (libFLNL, see M2FittsUILink)
+ * -----------------------------------------------------------------------------------------
+ * Continuous state stream, 13 doubles in this fixed order (registered in init()):
+ *      [t, x, y, dx, dy, Fx, Fy, stateCode, phase, trialIndex, targetX, halfWidth, dwellProgress]
+ * `t` is the state machine running time - the SAME clock as t_onset/t_end in the results csv
+ * and as the Time column of the raw log, so display frames and kinematics can be aligned.
+ *
+ * Commands sent to the UI (4 characters + double parameters):
+ *   "SESS" [version, block, nRounds, trialsPerRound, nWarmup, originX, originY, taskDirection,
+ *           dwellTime, maxTrialTime, originTolerance, returnOffset, useYChannel, displayGain]
+ *   "TRIA" [phase, round, trialInRound, trialIndex, A_cm, W_cm, ID, targetX, targetY,
+ *           halfWidth, originX, originY, dwellTime, maxTrialTime]   target onset
+ *   "HITT" [trialIndex, MT, nEntries, x_sel_cm]     trial validated (dwell completed)
+ *   "MISS" [trialIndex]                             trial timed out
+ *   "RETN" [awayX, awayY]                           robot is driving the handle off the origin
+ *   "DRAG" [originX, originY, tol, maxTime]         participant must drag the handle back
+ *   "ORIG" [originX, originY]                       handle on the origin, next trial imminent
+ *   "REST" [duration, trialsDone, phase]            break started
+ *   "RDY!" [requireGo, originX, originY]            waiting at the origin for the go signal
+ *   "WAIT" []                                       CORC is waiting for the client
+ *   "ENDE" [nTrials]                                end of Block 1
+ *   "PONG" [clientStamp, serverTime]                reply to PING
+ *   "VERR" [serverVersion]                          protocol version mismatch
+ *   "OK"                                            acknowledgement
+ *
+ * Commands accepted from the UI:
+ *   "HELO" [version, clientStamp]   handshake; triggers SESS + replay of the current context
+ *   "GTNS" / "STRT" / "SKIP"        go / skip the current wait
+ *   "ABRT"                          abort to transparent standby
+ *   "PING" [clientStamp]            latency and clock-offset measurement
+ *   "RTTR" [rtt_ms]                 client-measured round trip, logged for the record
+ *   "MARK" [code, clientTime]       display-side event marker, written into the raw log
  *
  * Keyboard: 's' (or joystick button 1) = go/skip, 'x' = abort to transparent standby.
  *
- * \version 0.1
- * \date 2026-09-12
+ * \version 1.0
+ * \date 2026-09-15
  */
 
 #ifndef M2FITTSHUMANMACHINE_H
@@ -39,7 +67,7 @@
 #include <string>
 #include <vector>
 
-#include "FLNLHelper.h"
+#include "M2FittsUILink.h"
 #include "RobotM2.h"
 #include "StateMachine.h"
 
@@ -73,6 +101,9 @@ class M2FittsHumanMachine : public StateMachine {
     bool requireGoSignal() const { return trialsDone_ == 0; }         //!< Explicit go needed only for the very first trial
     int trialsDone() const { return trialsDone_; }
     int blockNb() const { return block_; }
+    size_t nWarmupTrials() const { return warmupTrials_.size(); }
+    size_t nBlockTrials() const { return blockTrials_.size(); }
+    const std::string &participant() const { return participant_; }
 
     VM2 originPosition() const { return VM2(params_.originX, params_.originY); }
     VM2 targetPosition(const FittsTrial &t) const {
@@ -89,21 +120,30 @@ class M2FittsHumanMachine : public StateMachine {
     void finaliseTrial(double returnTime, bool timedOut, bool aborted);  //!< Called by the return state: writes the row, advances the trial counter
 
     //---------------------------------------------------------------- UI / inputs
+    //! Fire-and-forget UI event.
     void sendUI(const std::string &cmd, const std::vector<double> &params = {});
-    bool goSignal();    //!< Go/skip requested (UI command, keyboard 's'/'1' or joystick button 1)?
-    bool abortSignal(); //!< Abort requested (keyboard 'x')?
+    //! UI event that also defines what should be on screen; replayed on (re)connection.
+    void sendUIContext(const std::string &cmd, const std::vector<double> &params = {});
+
+    bool goSignal();     //!< Go/skip requested (UI command, keyboard 's'/'1' or joystick button 1)?
+    bool abortSignal();  //!< Abort requested (keyboard 'x' or UI ABRT)?
+
+    //! Is the client requirement satisfied (either not required, or connected and handshaked)?
+    bool uiReady() const { return !ui.required() || (ui.connected() && ui.handshakeDone()); }
 
     //---------------------------------------------------------------- continuous log
     void setLoggedState(double stateCode) { logState_ = stateCode; }
     void setLoggedTarget(double targetX, double halfWidth) { logTargetX_ = targetX; logHalfWidth_ = halfWidth; }
+    void setLoggedDwell(double progress) { logDwell_ = progress; }  //!< 0..1, authoritative dwell progress for the UI ring
 
     void printSummary();  //!< Per-ID trial count and mean MT of the block (printed at the end of the session)
 
-    std::shared_ptr<FLNLHelper> UIserver = nullptr;  //!< Communication server (Unity client)
+    M2FittsUILink ui;  //!< Communication layer (Unity client)
 
    private:
     //---- setup
-    bool loadConfig(const std::string &file);  //!< Optional 'key = value' config file; returns false if absent
+    bool loadConfig();  //!< Optional 'key = value' config file; tries several conventional paths
+    bool loadConfigFile(const std::string &file);
     std::string cfgStr(const std::string &key, const std::string &def) const;
     double cfgDbl(const std::string &key, double def) const;
     int cfgInt(const std::string &key, int def) const;
@@ -117,6 +157,7 @@ class M2FittsHumanMachine : public StateMachine {
     bool openResultsFile();
     void writeResultRow(const FittsTrialResult &r);
     void setCurrentTrial();
+    std::vector<double> sessionDescriptor() const;  //!< Parameters of the SESS command
 
     //---- protocol state
     FittsParams params_;
@@ -136,20 +177,37 @@ class M2FittsHumanMachine : public StateMachine {
     std::string trialsDir_ = "../schedule";
     std::string logDir_ = "../logs";
     std::string sessionTag_;   //!< <participant>_B<block>_<date-time>, used for both output files
-    std::string serverIP_ = "169.254.105.3";
+    std::shared_ptr<FLNLHelper> UIserver = nullptr;
+    std::string sessionId = "UNSET";
+    std::string serverIP_ = "169.254.105.2";
     int serverPort_ = 2048;
     int block_ = 1;
+
+    //---- UI
+    bool uiRequired_ = true;   //!< Do not start the protocol until a client has connected
+    int uiDivider_ = 2;        //!< Stream one frame every N control cycles (2 -> 250 Hz at 500 Hz loop)
+    double displayGain_ = 1.0; //!< Robot metre -> scene metre. MUST be 1 unless a gain manipulation is intended.
 
     //---- results
     std::ofstream resultsFile_;
     std::vector<FittsTrialResult> results_;
 
-    //---- values streamed in the continuous log (must outlive the logger)
+    //---- values streamed in the continuous log and to the UI (must outlive the logger/link)
+    //LogHelper::add() deduces its template parameter from the argument, so it must be given a
+    //NON-const lvalue: a const double& deduces LogElement<const double>, whose const scalar member
+    //cannot be default-initialised. (A const Eigen vector is fine - it has a default constructor -
+    //which is why the position/velocity/force lines below compile with their const accessors.)
+    //The UI markers therefore live here as plain doubles, mirrored from the link once per cycle,
+    //consistent with the other logged values.
     double logState_ = 0.;
     double logPhase_ = 0.;
     double logTrialNb_ = 0.;
     double logTargetX_ = 0.;
     double logHalfWidth_ = 0.;
+    double logDwell_ = 0.;
+    double logMarkCode_ = 0.;
+    double logMarkTime_ = 0.;
+    double logMarkServerTime_ = 0.;
 };
 
 #endif  // M2FITTSHUMANMACHINE_H
