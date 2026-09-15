@@ -19,7 +19,7 @@ ID_DECIMALS = 3
 df = pd.read_csv(csv_path)
 
 # Keep only the columns we need
-df = df[["ID_shannon_bits", "mt_final_entry_s"]].copy()
+df = df[["D_file","ID_shannon_bits", "mt_final_entry_s"]].copy()
 
 # ============================================================
 # CONVERT TO NUMERIC
@@ -34,6 +34,11 @@ df["mt_final_entry_s"] = pd.to_numeric(
     df["mt_final_entry_s"],
     errors="coerce"
 )
+
+df["D_file"] = pd.to_numeric(
+    df["D_file"],
+    errors="coerce"
+) 
 
 # Remove rows with missing/invalid values
 df = df.dropna()
@@ -58,9 +63,12 @@ df["ID_shannon_bits"] = df["ID_shannon_bits"].round(ID_DECIMALS)
 # ============================================================
 
 grouped = (
-    df.groupby("ID_shannon_bits")["mt_final_entry_s"]
-      .agg(["mean", "std", "count"])
-      .reset_index()
+    #df.groupby("ID_shannon_bits")["mt_final_entry_s"]
+    #  .agg(["mean", "std", "count"])
+    #  .reset_index()
+    df.groupby("D_file")["mt_final_entry_s"]
+        .agg(["mean", "std", "count"])
+        .reset_index()
 )
 
 print("\n================ Grouped Data ================")
@@ -70,7 +78,8 @@ print(grouped.to_string(index=False))
 # LINEAR REGRESSION
 # ============================================================
 
-x = grouped["ID_shannon_bits"].values
+#x = grouped["ID_shannon_bits"].values
+x = grouped["D_file"].values
 y = grouped["mean"].values
 
 # Check that there are enough unique IDs
@@ -118,7 +127,8 @@ plt.figure(figsize=(10, 6))
 # ------------------------------------------------------------
 
 plt.scatter(
-    df["ID_shannon_bits"],
+    #df["ID_shannon_bits"],
+    df["D_file"],
     df["mt_final_entry_s"],
     alpha=0.4,
     label="Individual measurements"
@@ -129,7 +139,8 @@ plt.scatter(
 # ------------------------------------------------------------
 
 plt.scatter(
-    grouped["ID_shannon_bits"],
+    #grouped["ID_shannon_bits"],
+    grouped["D_file"],
     grouped["mean"],
     s=70,
     label="Mean per ID"
@@ -182,7 +193,8 @@ plt.text(
 # LABELS / FORMATTING
 # ============================================================
 
-plt.xlabel("ID Shannon (bits)")
+#plt.xlabel("ID Shannon (bits)")
+plt.xlabel("A (cm)")
 plt.ylabel("Entry time (s)")
 plt.title("Entry Time vs ID Shannon")
 
@@ -192,5 +204,6 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
-save_path = csv_path.replace(".csv", "_regression_plot.png")
+save_path = csv_path.replace(".csv", "_regression_plot_MT_v_A.png")
+#save_path = csv_path.replace(".csv", "_regression_plot_MT_v_ID.png")
 plt.savefig(save_path, dpi=300)
