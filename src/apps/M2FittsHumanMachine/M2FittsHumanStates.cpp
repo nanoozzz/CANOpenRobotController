@@ -238,6 +238,11 @@ void M2FittsReachState::duringCode(void) {
     if (sm->p().useYChannel) F(1) = sm->p().channelK * (Xorigin_(1) - X(1)) - sm->p().channelD * dX(1);
     robot->setEndEffForceWithCompensation(F, true);
 
+    if (sm->p().useYChannel) {
+        double fy = sm->p().channelK * (Xorigin_(1) - X(1)) - sm->p().channelD * dX(1);
+        F(1) = std::max(std::min(fy, sm->p().channelFMax), -sm->p().channelFMax);
+    }
+
     //Kinematics along the task axis
     double x = sm->taskCoord(X);
     double xTarget = sm->taskCoord(Xtarget_);
@@ -318,7 +323,18 @@ void M2FittsReturnState::entryCode(void) {
     aborted_ = false;
     returnDone_ = false;
     snapRetries_ = 0;
-    gotoPhase(MOVE_AWAY);
+    overForceTime_ = 0.;
+    abortedLatched_ = false;
+    gotoPhase(CONFIRM);
+}
+
+bool M2FittsReturnState::forceAbort(double t) {
+    //Single-sample tests fire on grip transients. The check is also suspended briefly at the start
+    //of a driven move, because MOVE_AWAY begins the instant the 1 s validation dwell ends - when
+    //the participant has been actively holding the handle still and is most likely to be bracing.
+    if (t < sm->p().forceGraceTime) { overForceTime_ = 0.; return false; }
+    overForceTime_ = interactionForceTooHigh(robot, sm->p()) ? overForceTime_ + dt() : 0.;
+    return overForceTime_ >= sm->p().forceLimitTime;
 }
 
 void M2FittsReturnState::gotoPhase(ReturnPhase p) {
@@ -327,16 +343,23 @@ void M2FittsReturnState::gotoPhase(ReturnPhase p) {
     VM2 X = robot->getEndEffPosition();
 
     switch (p) {
+        case CONFIRM:  //wait for the participant to release the handle (or for a timeout)
+            robot->initTorqueControl();
+            robot->setEndEffForceWithCompensation(VM2::Zero(), true);
+            break;
+
         case MOVE_AWAY:  //robot drives the handle to returnOffset from the origin
             robot->initVelocityControl();
             Xi_ = X;
             T_ = std::max(sm->p().returnMinTime, (Xaway_ - Xi_).norm() / sm->p().returnSpeed);
             sm->sendUIContext("RETN", {Xaway_(0), Xaway_(1)});
+            overForceTime_ = 0.;  //reset the debounced force check for this driven move
             break;
 
         case DRAG:  //participant drags the handle back: self-paced inter-trial rest
             robot->initTorqueControl();
             robot->setEndEffForceWithCompensation(VM2::Zero(), true);
+            settleTime_ = 0.;
             sm->sendUIContext("DRAG", {Xorigin_(0), Xorigin_(1), sm->p().originTolerance, sm->p().maxReturnTime});
             break;
 
@@ -359,13 +382,29 @@ void M2FittsReturnState::duringCode(void) {
     VM2 Xd, dXd;
 
     switch (phase_) {
+        case CONFIRM: {
+            VM2 F = VM2::Zero();
+            if (sm->p().useYChannel) F(1) = sm->p().channelK * (Xorigin_(1) - X(1)) - sm->p().channelD * dX(1);
+            robot->setEndEffForceWithCompensation(F, true);
+            if (t >= sm->p().successHoldTime) gotoPhase(MOVE_AWAY);
+            break;
+        }
+
         case MOVE_AWAY: {
             double status = JerkIt(Xi_, Xaway_, T_, t, Xd, dXd);
             robot->setEndEffVelocity(dXd + sm->p().kPosVel * (Xd - X));
-            if (interactionForceTooHigh(robot, sm->p())) {
+            /*if (interactionForceTooHigh(robot, sm->p())) {
                 //The participant is resisting: stop driving and let them bring the handle back
                 aborted_ = true;
                 spdlog::warn("M2FittsHuman: robot-driven move aborted (interaction force > {} N).", sm->p().forceLimit);
+                gotoPhase(DRAG);
+            } */
+            if (forceAbort(t)) {
+                aborted_ = true;
+                abortedLatched_ = true;
+                spdlog::warn("M2FittsHuman: MOVE_AWAY aborted at x={:.4f} m ({:.0f}% of the way), |F|={:.1f} N.",
+                             X(0), 100. * (X(0) - Xi_(0)) / (Xaway_(0) - Xi_(0) + 1e-9),
+                             robot->getInteractionForce().norm());
                 gotoPhase(DRAG);
             } else if (status >= 1.) {
                 gotoPhase(DRAG);
@@ -379,14 +418,25 @@ void M2FittsReturnState::duringCode(void) {
             robot->setEndEffForceWithCompensation(F, true);
 
             double d = sm->p().useYChannel ? std::fabs(sm->taskCoord(X) - sm->taskCoord(Xorigin_)) : (X - Xorigin_).norm();
-            if (d <= sm->p().originTolerance) {  //back within tolerance: the robot takes over for the last mm
-                dragTime_ = t;
-                gotoPhase(SNAP);
-            } else if (t >= sm->p().maxReturnTime) {  //rest cap reached: the robot returns the handle itself
+            double speed = sm->p().useYChannel ? std::fabs(dX(0)) : dX.norm();
+
+            if (d <= sm->p().originTolerance && speed <= sm->p().originSettleSpeed) {  //back within tolerance and slow enough: the robot takes over for the last mm
+                settleTime_ += dt();          // or dt() from the State base
+                if (settleTime_ >= sm->p().originSettleTime) 
+                { 
+                    dragTime_ = t; 
+                    aborted_ = false;  //the robot is taking over, so the participant is no longer resisting
+                    gotoPhase(SNAP); 
+                }
+            } /*else if (t >= sm->p().maxReturnTime) {  //rest cap reached: the robot returns the handle itself
                 dragTime_ = t;
                 timedOut_ = true;
                 spdlog::warn("M2FittsHuman: handle not returned within {} s - robot repositioning.", sm->p().maxReturnTime);
                 gotoPhase(SNAP);
+            }*/
+            else {
+                settleTime_ = 0.;
+                aborted_ = false;  //the participant is still dragging, so the robot is not fighting them
             }
             break;
         }
@@ -394,8 +444,10 @@ void M2FittsReturnState::duringCode(void) {
         case SNAP: {
             double status = JerkIt(Xi_, Xorigin_, T_, t, Xd, dXd);
             robot->setEndEffVelocity(dXd + sm->p().kPosVel * (Xd - X));
-            if (interactionForceTooHigh(robot, sm->p()) && snapRetries_ < 2) {
+            //if (interactionForceTooHigh(robot, sm->p()) && snapRetries_ < 2) {
+            if (forceAbort(t) && snapRetries_ < 2) {
                 aborted_ = true;
+                abortedLatched_ = true;
                 snapRetries_++;
                 spdlog::warn("M2FittsHuman: repositioning aborted (interaction force > {} N), retry {}.", sm->p().forceLimit, snapRetries_);
                 gotoPhase(DRAG);
@@ -413,7 +465,7 @@ void M2FittsReturnState::duringCode(void) {
 
             if (t >= sm->p().originHoldTime) {
                 //Trial cycle complete: write the row and move the protocol on
-                sm->finaliseTrial(dragTime_, timedOut_, aborted_);
+                sm->finaliseTrial(dragTime_, timedOut_, abortedLatched_);
                 returnDone_ = true;
             }
             break;

@@ -33,6 +33,7 @@ static const char *kConfigCandidates[] = {
     "config/M2FittsHumanMachine.cfg",
     "../config/M2FittsHuman.conf",
     "../config/M2FittsHumanMachine.cfg",
+    "/home/nle/Fitts/CANOpenRobotController/config/M2FittsHumanMachine.cfg"
 };
 
 /******************************************************************************
@@ -191,7 +192,11 @@ bool M2FittsHumanMachine::loadConfigFile(const std::string &file) {
 
 bool M2FittsHumanMachine::loadConfig() {
     for (const char *candidate : kConfigCandidates) {
-        if (loadConfigFile(candidate)) return true;
+        if (loadConfigFile(candidate)) 
+        {
+            spdlog::info("M2FittsHuman: using config file {}.", candidate);
+            return true;
+        }
     }
     spdlog::warn("M2FittsHuman: no config file found (tried config/M2FittsHuman.conf and "
                  "config/M2FittsHumanMachine.cfg, also one level up). Using built-in defaults.");
@@ -234,10 +239,12 @@ void M2FittsHumanMachine::applyConfig() {
     params_.useYChannel = cfgBool("use_y_channel", params_.useYChannel);
     params_.channelK = cfgDbl("channel_k", params_.channelK);
     params_.channelD = cfgDbl("channel_d", params_.channelD);
+    params_.channelFMax = cfgDbl("channel_f_max", params_.channelFMax);  // new parameter for channel force saturation
 
     params_.dwellTime = cfgDbl("dwell_time", params_.dwellTime);
     params_.homeExitRadius = cfgDbl("home_exit_radius", params_.homeExitRadius);
     params_.maxTrialTime = cfgDbl("max_trial_time", params_.maxTrialTime);
+    params_.successHoldTime = cfgDbl("success_hold_time", params_.successHoldTime);
 
     params_.returnOffset = cfgDbl("return_offset", params_.returnOffset);
     params_.returnSpeed = cfgDbl("return_speed", params_.returnSpeed);
@@ -246,6 +253,10 @@ void M2FittsHumanMachine::applyConfig() {
     params_.maxReturnTime = cfgDbl("max_return_time", params_.maxReturnTime);
     params_.originSnapTime = cfgDbl("origin_snap_time", params_.originSnapTime);
     params_.originHoldTime = cfgDbl("origin_hold_time", params_.originHoldTime);
+    params_.originSettleSpeed = cfgDbl("origin_settle_speed", params_.originSettleSpeed);
+    params_.originSettleTime = cfgDbl("origin_settle_time", params_.originSettleTime);
+    params_.forceLimitTime = cfgDbl("force_limit_time", params_.forceLimitTime);
+    params_.forceGraceTime = cfgDbl("force_grace_time", params_.forceGraceTime);
 
     params_.roundBreakTime = cfgDbl("round_break_time", params_.roundBreakTime);
     params_.warmupRestTime = cfgDbl("warmup_rest_time", params_.warmupRestTime);

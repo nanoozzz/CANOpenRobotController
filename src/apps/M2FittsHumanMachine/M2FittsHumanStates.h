@@ -118,11 +118,13 @@ struct FittsParams {
                                   //!< This is a task constraint, NOT assistance: it must be identical in Blocks 1 and 2.
     double channelK = 800.;       //!< Channel stiffness [N/m]
     double channelD = 10.;        //!< Channel damping [N/(m/s)]
+    double channelFMax = 30.;    //!< Channel force saturation [N]: the channel is not a hard wall, but a spring-damper with a max force
 
     // --- Trial (reaching phase) ---
     double dwellTime = 1.0;       //!< Time the cursor must stay inside the target to validate the trial [s]
     double homeExitRadius = 0.005;//!< Distance from origin beyond which the movement is considered started [m]
-    double maxTrialTime = 10.0;   //!< Trial time-out [s]: trial is aborted (success=0) and the cycle continues
+    double maxTrialTime = 15.0;   //!< Trial time-out [s]: trial is aborted (success=0) and the cycle continues
+    double successHoldTime = 0.5; //!< Hold at the target after a successful trial, before the robot starts the return [s]
 
     // --- Post-trial return to the origin (protocol note of the flow chart) ---
     double returnOffset = 0.03;   //!< The robot drives the handle to this distance from the origin [m]
@@ -132,6 +134,10 @@ struct FittsParams {
     double maxReturnTime = 5.0;   //!< Participant-chosen inter-trial rest cap [s]: after this the robot returns on its own
     double originSnapTime = 0.4;  //!< Duration of the final robot-driven move onto the exact origin [s]
     double originHoldTime = 0.25; //!< Hold at the origin before the next target onset [s]
+    double originSettleSpeed = 0.03; //!< Handle must be slower than this to count as returned [m/s]
+    double originSettleTime  = 0.15;  //!< ...and stay inside the tolerance for this long [s]
+    double forceLimitTime = 0.10;  //!< |F| must exceed forceLimit continuously for this long [s]
+    double forceGraceTime = 0.15;  //!< Force check suspended this long after a driven move starts [s]
 
     // --- Breaks ---
     double roundBreakTime = 60.;  //!< Break after each round of 45 trials [s] (participant can end it early)
@@ -306,7 +312,7 @@ class M2FittsReturnState : public M2FittsState {
     bool isReturnDone() { return returnDone_; }
 
    private:
-    enum ReturnPhase { MOVE_AWAY = 0, DRAG = 1, SNAP = 2, HOLD = 3 };
+    enum ReturnPhase {CONFIRM = 0, MOVE_AWAY = 1, DRAG = 2, SNAP = 3, HOLD = 4 };
 
     void gotoPhase(ReturnPhase p);
 
@@ -317,9 +323,13 @@ class M2FittsReturnState : public M2FittsState {
     double T_ = 1.;           //!< Duration of the current robot-driven move [s]
     double dragTime_ = 0.;    //!< Measured duration of the participant-driven drag back [s]
     int snapRetries_ = 0;     //!< Number of aborted final repositioning attempts (bounded to avoid a loop)
+    double overForceTime_ = 0.;    //!< Time |F| has been continuously above the limit [s]
+    bool abortedLatched_ = false;  //!< Any abort this trial, for the results row
     bool timedOut_ = false;
     bool aborted_ = false;
     bool returnDone_ = false;
+    double settleTime_ = 0.;      //!< Time the handle has been within the origin tolerance and below the settle speed [s]
+    bool forceAbort(double t);      //!< Debounced interaction-force check for driven phases
 };
 
 /**
