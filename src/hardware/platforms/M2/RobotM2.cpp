@@ -392,12 +392,23 @@ setMovementReturnCode_t RobotM2::setEndEffForceWithCompensation(VM2 F, bool fric
         return OUTSIDE_LIMITS;
     }
     VM2 tau_f(0, 0);                     //Friction compensation torque
-    if (friction_comp) {
+    /*if (friction_comp) {
         double alpha = 8, beta = 1, threshold = 0.05;
         for (unsigned int i = 0; i < joints.size(); i++) {
             double dq = ((JointM2 *)joints[i])->getVelocity();
             if (abs(dq) > threshold) {
                 tau_f(i) = alpha * sign(dq) + beta * dq;
+            } else {
+                tau_f(i) = .0;
+            }
+        }
+    }*/
+    if (friction_comp) {
+        double gamma = 0.005;
+        double threshold = 0.05;
+        for (unsigned int i = 0; i < joints.size(); i++) {
+            if (abs(interactionForces[i]) > threshold) {
+                tau_f(i) = gamma * interactionForces[i];
             } else {
                 tau_f(i) = .0;
             }
