@@ -220,6 +220,7 @@ void M2FittsReachState::entryCode(void) {
     res_.phase = sm->phase();
     res_.trial = trial_;
     res_.t_onset = sm->runningTime();
+    res_.x_start_cm = (sm->taskCoord(robot->getEndEffPosition()) - sm->taskCoord(Xorigin_)) * 100.;
 
     //Target onset. Context command: replayed verbatim if the client reconnects mid-trial, so the
     //display always shows the target that the robot side is actually scoring.
@@ -360,7 +361,7 @@ void M2FittsReturnState::gotoPhase(ReturnPhase p) {
             robot->initTorqueControl();
             robot->setEndEffForceWithCompensation(VM2::Zero(), true);
             settleTime_ = 0.;
-            sm->sendUIContext("DRAG", {Xorigin_(0), Xorigin_(1), sm->p().originTolerance, sm->p().maxReturnTime});
+            sm->sendUIContext("DRAG", {Xorigin_(0), Xorigin_(1), sm->p().originTolerance, sm->p().maxReturnTime, X(0), X(1)});
             break;
 
         case SNAP:  //robot positions the handle on the exact origin
@@ -392,22 +393,33 @@ void M2FittsReturnState::duringCode(void) {
 
         case MOVE_AWAY: {
             double status = JerkIt(Xi_, Xaway_, T_, t, Xd, dXd);
-            robot->setEndEffVelocity(dXd + sm->p().kPosVel * (Xd - X));
-            /*if (interactionForceTooHigh(robot, sm->p())) {
-                //The participant is resisting: stop driving and let them bring the handle back
-                aborted_ = true;
-                spdlog::warn("M2FittsHuman: robot-driven move aborted (interaction force > {} N).", sm->p().forceLimit);
-                gotoPhase(DRAG);
-            } */
+
+            //Switch to the regulator gain once the profile is done, or the residual takes ~1 s to close
+            double k = (status >= 1.) ? sm->p().kHold : sm->p().kPosVel;
+            robot->setEndEffVelocity(dXd + k * (Xd - X));
+
             if (forceAbort(t)) {
                 aborted_ = true;
                 abortedLatched_ = true;
-                spdlog::warn("M2FittsHuman: MOVE_AWAY aborted at x={:.4f} m ({:.0f}% of the way), |F|={:.1f} N.",
-                             X(0), 100. * (X(0) - Xi_(0)) / (Xaway_(0) - Xi_(0) + 1e-9),
-                             robot->getInteractionForce().norm());
+                spdlog::warn("M2FittsHuman: MOVE_AWAY aborted at x={:.4f} m, |F|={:.1f}.",
+                             X(0), robot->getInteractionForce().norm());
                 gotoPhase(DRAG);
-            } else if (status >= 1.) {
-                gotoPhase(DRAG);
+            } else {
+                //Exit on arrival, not on elapsed time. Previously this was `status >= 1.`, so the
+                //move ended wherever the handle happened to be after T_ seconds - short of the
+                //away point when the loop lagged, past it when residual velocity carried it on.
+                bool arrived = std::fabs(sm->taskCoord(X) - sm->taskCoord(Xaway_)) <= sm->p().awayTolerance;
+                bool slow    = std::fabs(dX(0)) <= sm->p().awaySettleSpeed;
+
+                if (status >= 1. && arrived && slow) {
+                    spdlog::info("M2FittsHuman: MOVE_AWAY converged {:+.2f} mm from the away point after {:.2f} s.",(sm->taskCoord(X) - sm->taskCoord(Xaway_)) * 1000., t);
+                    gotoPhase(DRAG);
+                } else if (t > T_ + sm->p().maxMoveExtraTime) {
+                    spdlog::warn("M2FittsHuman: MOVE_AWAY did not converge - stopped {:.1f} mm from "
+                                 "the away point (x={:.4f} m, target {:.4f} m).",
+                                 (sm->taskCoord(X) - sm->taskCoord(Xaway_)) * 1000., X(0), Xaway_(0));
+                    gotoPhase(DRAG);
+                }
             }
             break;
         }
@@ -443,7 +455,9 @@ void M2FittsReturnState::duringCode(void) {
 
         case SNAP: {
             double status = JerkIt(Xi_, Xorigin_, T_, t, Xd, dXd);
-            robot->setEndEffVelocity(dXd + sm->p().kPosVel * (Xd - X));
+            double k = (status >= 1.) ? sm->p().kHold : sm->p().kPosVel;
+            robot->setEndEffVelocity(dXd + k * (Xd - X));
+
             //if (interactionForceTooHigh(robot, sm->p()) && snapRetries_ < 2) {
             if (forceAbort(t) && snapRetries_ < 2) {
                 aborted_ = true;
@@ -451,8 +465,19 @@ void M2FittsReturnState::duringCode(void) {
                 snapRetries_++;
                 spdlog::warn("M2FittsHuman: repositioning aborted (interaction force > {} N), retry {}.", sm->p().forceLimit, snapRetries_);
                 gotoPhase(DRAG);
-            } else if (status >= 1.) {
+            } /*else if (status >= 1.) {
                 gotoPhase(HOLD);
+            }*/ else {
+                bool arrived = (X - Xorigin_).norm() <= sm->p().awayTolerance;
+                bool slow    = dX.norm() <= sm->p().awaySettleSpeed;
+
+                if (status >= 1. && arrived && slow) {
+                    gotoPhase(HOLD);
+                } else if (t > T_ + sm->p().maxMoveExtraTime) {
+                    spdlog::warn("M2FittsHuman: SNAP did not converge - trial will start {:.1f} mm "
+                                 "off the origin.", (X - Xorigin_).norm() * 1000.);
+                    gotoPhase(HOLD);
+                }
             }
             break;
         }

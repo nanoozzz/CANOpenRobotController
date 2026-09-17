@@ -97,6 +97,7 @@ struct FittsTrialResult {
     double x_sel_cm = fittsNaN();      //!< Signed distance to target centre at end of dwell [cm] (selection point)
     double v_peak = 0.;                //!< Peak speed along the task axis [m/s]
     bool success = false;              //!< true if the dwell was completed before the trial time-out
+    double x_start_cm = fittsNaN();  //!< Signed distance to target centre at movement onset [cm] (for effective amplitude)
 
     double returnTime = fittsNaN();    //!< Duration of the participant-driven drag back to the origin [s]
     bool returnTimeout = false;        //!< true if the drag-back cap was reached and the robot returned on its own
@@ -138,7 +139,7 @@ struct FittsParams {
     double originSettleTime  = 0.15;  //!< ...and stay inside the tolerance for this long [s]
     double forceLimitTime = 0.10;  //!< |F| must exceed forceLimit continuously for this long [s]
     double forceGraceTime = 0.15;  //!< Force check suspended this long after a driven move starts [s]
-
+    
     // --- Breaks ---
     double roundBreakTime = 60.;  //!< Break after each round of 45 trials [s] (participant can end it early)
     double warmupRestTime = 60.;  //!< Rest between warm-up and Block 1 [s]
@@ -147,6 +148,14 @@ struct FittsParams {
     // --- Control / safety ---
     double kPosVel = 1.0;         //!< Proportional gain of the position-over-velocity loop [1/s]
     double forceLimit = 30.;      //!< Interaction force above which a robot-driven move is aborted [N]
+    
+    double kHold = 8.;            //!< Regulator gain after the trajectory ends [1/s]
+
+    //! Robot-driven moves previously exited on elapsed time, so they stopped wherever the handle
+    //! happened to be at t = T_. They now exit on arrival, with a bounded extension.
+    double awayTolerance = 0.002;    //!< Distance to the away point that counts as arrived [m]
+    double awaySettleSpeed = 0.02;   //!< ...and the handle must be slower than this [m/s]
+    double maxMoveExtraTime = 1.0;   //!< Extra time allowed beyond T_ before giving up [s]
 
     // --- Structure ---
     int nRounds = 4;              //!< Number of rounds (csv groups) in the block

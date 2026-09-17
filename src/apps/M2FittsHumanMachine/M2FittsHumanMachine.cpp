@@ -264,6 +264,10 @@ void M2FittsHumanMachine::applyConfig() {
 
     params_.kPosVel = cfgDbl("k_pos_vel", params_.kPosVel);
     params_.forceLimit = cfgDbl("force_limit", params_.forceLimit);
+    params_.kHold = cfgDbl("k_hold", params_.kHold);
+    params_.awayTolerance = cfgDbl("away_tolerance", params_.awayTolerance);
+    params_.awaySettleSpeed = cfgDbl("away_settle_speed", params_.awaySettleSpeed);
+    params_.maxMoveExtraTime = cfgDbl("max_move_extra_time", params_.maxMoveExtraTime);
 
     params_.nRounds = cfgInt("n_rounds", params_.nRounds);
     params_.trialsPerRound = cfgInt("trials_per_round", params_.trialsPerRound);
@@ -484,7 +488,7 @@ bool M2FittsHumanMachine::openResultsFile() {
         return false;
     }
     resultsFile_ << "participant,block,phase,round,trial_in_round,trial_index,"
-                    "A_cm,W_cm,ID_bits,"
+                    "A_cm,W_cm,ID_bits,x_start_cm,"
                     "MT_s,RT_s,MT_move_s,t_first_entry_s,n_entries,"
                     "x_entry_cm,x_sel_cm,v_peak_ms,success,"
                     "return_time_s,return_timeout,return_abort,"
@@ -499,7 +503,7 @@ void M2FittsHumanMachine::writeResultRow(const FittsTrialResult &r) {
     resultsFile_ << participant_ << "," << block_ << ","
                  << (r.phase == PHASE_WARMUP ? "warmup" : "block") << ","
                  << r.trial.round << "," << r.trial.inRound << "," << r.trial.index << ","
-                 << num(r.trial.A_cm, 4) << "," << num(r.trial.W_cm, 6) << "," << num(r.trial.ID_bits, 4) << ","
+                 << num(r.trial.A_cm, 4) << "," << num(r.trial.W_cm, 6) << "," << num(r.trial.ID_bits, 4) << "," <<num(r.x_start_cm, 4) << ","
                  << num(r.MT, 4) << "," << num(r.RT, 4) << "," << num(r.MT_move, 4) << ","
                  << num(r.t_first_entry, 4) << "," << r.nEntries << ","
                  << num(r.x_entry_cm, 4) << "," << num(r.x_sel_cm, 4) << "," << num(r.v_peak, 4) << ","
