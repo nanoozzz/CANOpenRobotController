@@ -404,16 +404,23 @@ setMovementReturnCode_t RobotM2::setEndEffForceWithCompensation(VM2 F, bool fric
         }
     }*/
     if (friction_comp) {
-        double gamma = 0.005;
+        double gamma = 0.6;
         double threshold = 0.05;
         for (unsigned int i = 0; i < joints.size(); i++) {
             if (abs(interactionForces[i]) > threshold) {
-                tau_f(i) = gamma * interactionForces[i];
+                tau_f(i) = -gamma * interactionForces[i];
             } else {
                 tau_f(i) = .0;
             }
         }
     }
+    //spdlog::info("Interaction forces: [{:.2f}, {:.2f}]", interactionForces[0], interactionForces[1]);
+    //std::cout << std::setprecision(3) << std::fixed;
+    //std::cout << "Interaction forces: " << interactionForces.transpose() << " ]\t";
+    //std::cout << "Original torque: " << J().transpose() * F << " ]\t";
+    //std::cout << "tau_f " << tau_f.transpose() << " ]\t";
+    //std::cout << "Final torque: " << (J().transpose() * F + tau_f).transpose() << " ]\t";
+    //std::cout << std::endl;
 
     return setJointTorque(J().transpose() * F + tau_f);
 }
