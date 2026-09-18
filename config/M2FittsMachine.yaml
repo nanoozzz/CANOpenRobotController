@@ -29,10 +29,10 @@ M2FittsMachine:
     homing_ref_speed: 0.10      # reference speed from the calibration corner to home (must be > 0)
 
   pd:
-    kp: [500.0, 3200.0]          # N/m   [x, y] 1400
-    kd: [10.0, 100.0]            # N.s/m [x, y] 125
+    kp: [1400.0, 3200.0]          # N/m   [x, y] 1400
+    kd: [115.0, 100.0]            # N.s/m [x, y] 125
     f_max: 30.0                 # per-axis saturation of the PD force (commissioning value)
-    velocity_filter_hz: 0.0     # low-pass cut-off on measured velocity for the D term (0 = off)
+    velocity_filter_hz: 30.0     # low-pass cut-off on measured velocity for the D term (0 = off)
     friction_compensation: true  # false = pure PD; true = PD + RobotM2 friction feedforward
 
   safety:
