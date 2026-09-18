@@ -403,12 +403,25 @@ setMovementReturnCode_t RobotM2::setEndEffForceWithCompensation(VM2 F, bool fric
             }
         }
     }*/
-    if (friction_comp) {
+    /*if (friction_comp) {
         double gamma = 0.6;
         double threshold = 0.05;
         for (unsigned int i = 0; i < joints.size(); i++) {
             if (abs(interactionForces[i]) > threshold) {
                 tau_f(i) = -gamma * interactionForces[i];
+            } else {
+                tau_f(i) = .0;
+            }
+        }
+    }*/
+    if (friction_comp) {
+        double alpha = 3.0, beta = 0.5, gamma = 0.4, threshold_v = 0.05, threshold_f = 0.05;
+        double blend = 0.5;
+        
+        for (unsigned int i = 0; i < joints.size(); i++) {
+            double dq = ((JointM2 *)joints[i])->getVelocity();
+            if (abs(interactionForces[i]) > threshold_f && abs(dq) > threshold_v) {
+                tau_f(i) = -gamma * interactionForces[i] * blend + (1 - blend) * (alpha * sign(dq) + beta * dq);
             } else {
                 tau_f(i) = .0;
             }
