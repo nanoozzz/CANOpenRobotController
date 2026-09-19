@@ -13,7 +13,7 @@ M2FittsMachine:
     start_trial: 1              # 1-based; set > 1 to resume an interrupted block
 
   task:
-    home: [0.40, 0.20]          # start/return position; y is held at 0.20 throughout
+    home: [0.40, 0.10]          # start/return position; y is held at 0.20 throughout
     direction: -1               # targets at x = 0.40 - D
     tolerance_factor: 0.5       # success band |x - x_target| <= 0.5 * W
     dwell_time: 1.0             # continuous time inside the band required for success
@@ -26,17 +26,17 @@ M2FittsMachine:
     rest_time: 0.5              # continuous rest at home before the next trial starts
     settle_timeout: 10.0        # extra time to settle before the block pauses with a warning
     return_ref_speed: 0.10      # reference speed of the return movement (0 = step, like the trials)
-    homing_ref_speed: 0.05      # reference speed from the calibration corner to home (must be > 0)
+    homing_ref_speed: 0.10      # reference speed from the calibration corner to home (must be > 0)
 
   pd:
-    kp: [1400.0, 3200.0]          # N/m   [x, y]
-    kd: [125.0, 100.0]            # N.s/m [x, y]
-    f_max: 25.0                 # per-axis saturation of the PD force (commissioning value)
-    velocity_filter_hz: 0.0     # low-pass cut-off on measured velocity for the D term (0 = off)
+    kp: [1400.0, 3200.0]          # N/m   [x, y] 1400
+    kd: [100.0, 100.0]            # N.s/m [x, y] 125
+    f_max: 30.0                 # per-axis saturation of the PD force (commissioning value)
+    velocity_filter_hz: 30.0     # low-pass cut-off on measured velocity for the D term (0 = off)
     friction_compensation: true  # false = pure PD; true = PD + RobotM2 friction feedforward
 
   safety:
-    max_speed: 1.2            # app-level speed limit -> FaultState (RobotM2 itself disables at 3 m/s)
+    max_speed: 1.5            # app-level speed limit -> FaultState (RobotM2 itself disables at 3 m/s)
     workspace_x: [0.0, 0.625]   # x range defined in RobotM2 (CORC)
     workspace_y: [0.0, 0.440]   # y range defined in RobotM2 (CORC)
     workspace_tolerance: 0.01   # allowed excursion outside the range before a fault
@@ -50,4 +50,4 @@ M2FittsMachine:
     still_time: 1.0
 
   logging:
-    folder: "logs"              # relative to the folder the app is launched from
+    folder: "../logs"              # relative to the folder the app is launched from
