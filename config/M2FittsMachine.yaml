@@ -30,7 +30,7 @@ M2FittsMachine:
 
   pd:
     kp: [1400.0, 3200.0]          # N/m   [x, y] 1400
-    kd: [115.0, 100.0]            # N.s/m [x, y] 125
+    kd: [100.0, 100.0]            # N.s/m [x, y] 125
     f_max: 30.0                 # per-axis saturation of the PD force (commissioning value)
     velocity_filter_hz: 30.0     # low-pass cut-off on measured velocity for the D term (0 = off)
     friction_compensation: true  # false = pure PD; true = PD + RobotM2 friction feedforward
@@ -50,4 +50,4 @@ M2FittsMachine:
     still_time: 1.0
 
   logging:
-    folder: "logs"              # relative to the folder the app is launched from
+    folder: "../logs"              # relative to the folder the app is launched from
