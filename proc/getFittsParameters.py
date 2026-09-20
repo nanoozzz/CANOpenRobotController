@@ -7,7 +7,8 @@ from scipy.stats import linregress
 # USER SETTINGS
 # ============================================================
 
-csv_path = r"C:\Users\nguyenbaongu\Downloads\M2FittsHuman_P01_B1_20260917-173753_trials 1.csv"
+#csv_path = r"C:\Users\nguyenbaongu\Downloads\M2FittsHuman_P01_B1_20260917-173753_trials 1.csv"
+csv_path = r"logs/M2FittsHuman_P01_B1_20260919-152657_trials.csv";
 
 # Choose what to plot:
 #
