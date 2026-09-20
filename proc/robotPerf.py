@@ -7,7 +7,7 @@ from scipy.stats import linregress
 # USER SETTINGS
 # ============================================================
 
-csv_path = r"logs/M2Fitts_20260911_190239_trials.csv"
+csv_path = r"logs/M2Fitts_20260919_144537_trials.csv"
 
 # Choose what to plot:
 #
@@ -15,7 +15,7 @@ csv_path = r"logs/M2Fitts_20260911_190239_trials.csv"
 # "ID" -> MT vs ID
 # "W"  -> MT vs W
 #
-MODE = "W"
+MODE = "ID"
 
 # Width column in your CSV
 WIDTH_COLUMN = "W_file"

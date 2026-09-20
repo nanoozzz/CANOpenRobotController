@@ -22,7 +22,7 @@ HUMAN_MT_COLUMN = "MT_move_s"
 # Robot CSV
 # ------------------------------------------------------------
 
-robot_csv = r"logs/M2Fitts_20260911_190239_trials.csv"
+robot_csv = r"logs/M2Fitts_20260919_144537_trials.csv"
 
 ROBOT_ID_COLUMN = "ID_shannon_bits"
 ROBOT_MT_COLUMN = "mt_final_entry_s"
@@ -43,7 +43,7 @@ ROBOT_MT_COLUMN = "mt_final_entry_s"
 # variables below.
 #
 
-shared_csv = r"logs/M2FittsRobotHuman_P01_B2_20260920-174200_trials.csv"
+shared_csv = r"logs/M2FittsRobotHuman_P01_B2_20260920-190859_trials.csv"
 
 SHARED_ID_COLUMN = "ID_bits"
 SHARED_MT_COLUMN = "MT_move_s"
@@ -595,7 +595,7 @@ plt.plot(
 #
 # Only the shared-control points are shown.
 #
-
+""""
 plt.scatter(
     shared["ID"],
     shared["MT"],
@@ -605,20 +605,42 @@ plt.scatter(
     label="Shared-control trials"
 )
 
+"""
+# ------------------------------------------------------------
+# Shared-control regression fitted to actual data
+# ------------------------------------------------------------
+
+x_shared = np.linspace(
+    shared["ID"].min(),
+    shared["ID"].max(),
+    200
+)
+
+y_shared = (
+    shared_reg["slope"] * x_shared
+    + shared_reg["intercept"]
+)
 
 # ------------------------------------------------------------
 # Shared-control expected values
 # ------------------------------------------------------------
 
-plt.plot(
+"""plt.plot(
     shared_reg["grouped"]["ID"],
     shared_reg["grouped"]["MT_expected"],
     linewidth=2,
     linestyle=":",
     marker="D",
     label="Shared-control expected MT"
-)
+)"""
 
+plt.plot(
+    x_shared,
+    y_shared,
+    linewidth=2,
+    linestyle=":",
+    label="Shared-control regression"
+)
 
 # ------------------------------------------------------------
 # Add expected MT labels

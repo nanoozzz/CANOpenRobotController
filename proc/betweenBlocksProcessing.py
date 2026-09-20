@@ -25,7 +25,7 @@ human_csv = r"logs/M2FittsHuman_P01_B1_20260919-152657_trials.csv"
 # Robot CSV
 # ------------------------------------------------------------
 
-robot_csv = r"logs/M2Fitts_20260911_190239_trials.csv"
+robot_csv = r"logs/M2Fitts_20260919_144537_trials.csv"
 
 # Robot:
 #   A   -> D_file
@@ -395,7 +395,16 @@ expected_ID = pd.merge(
 # Here, the simplest task is defined as the smallest ID
 # present in BOTH datasets.
 #
+highest_ID = robot_ID_reg["grouped"]["ID_shannon_bits"].max()
 
+highest_robot = robot_ID_reg["grouped"][
+    robot_ID_reg["grouped"]["ID_shannon_bits"] == highest_ID
+]
+
+print("\n=== Robot expected MT at highest ID ===")
+print(highest_robot[
+    ["ID_shannon_bits", "MT_expected_s"]
+].to_string(index=False))
 
 if len(expected_ID) == 0:
     raise ValueError(
@@ -406,10 +415,10 @@ if len(expected_ID) == 0:
 simplest_ID = expected_ID["ID"].min()
 
 
-MT_o = expected_ID.loc[
+MT_o = max(expected_ID.loc[
     expected_ID["ID"] == simplest_ID,
     "MT_h"
-].iloc[0]
+].iloc[0], highest_robot["MT_expected_s"].iloc[0])
 
 
 print("\n============================================================")
@@ -418,7 +427,6 @@ print("============================================================")
 
 print(f"Simplest ID = {simplest_ID:.3f}")
 print(f"MT_o        = {MT_o:.6f} s")
-
 
 # ============================================================
 # CALCULATE ALPHA
@@ -431,7 +439,6 @@ print(f"MT_o        = {MT_o:.6f} s")
 #     (MT_r - MT_h)
 #
 #
-
 
 expected_ID["alpha"] = (
     (MT_o - expected_ID["MT_h"])
@@ -452,6 +459,14 @@ expected_ID.loc[
     "alpha"
 ] = np.nan
 
+# ============================================================
+# CLAMP ALPHA TO [0, 1]
+# ============================================================
+
+expected_ID["alpha"] = expected_ID["alpha"].clip(
+    lower=0.0,
+    upper=1.0
+)
 
 # ============================================================
 # PRINT EXPECTED MT + ALPHA
@@ -467,7 +482,6 @@ print(
         float_format=lambda x: f"{x:.6f}"
     )
 )
-
 
 # ============================================================
 # SAVE ID -> MT_h -> MT_r -> ALPHA TABLE

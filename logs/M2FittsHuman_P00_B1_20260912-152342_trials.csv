@@ -1,4 +1,0 @@
-participant,block,phase,round,trial_in_round,trial_index,A_cm,W_cm,ID_bits,MT_s,RT_s,MT_move_s,t_first_entry_s,n_entries,x_entry_cm,x_sel_cm,v_peak_ms,success,return_time_s,return_timeout,return_abort,dwell_s,t_onset_s,t_end_s
-P00,1,warmup,1,1,1,12.0000,2.000000,2.8074,NaN,3.5109,NaN,3.9049,1,NaN,NaN,0.3340,0,5.0014,1,1,1.000,17.6821,27.6826
-P00,1,warmup,1,2,2,12.0000,1.333333,3.3219,NaN,0.0227,NaN,NaN,0,NaN,NaN,0.0009,0,3.6112,1,1,1.000,39.1422,49.1439
-P00,1,warmup,1,3,3,18.0000,1.333333,3.8580,NaN,0.0228,NaN,NaN,0,NaN,NaN,0.2035,0,1.3848,0,1,1.000,59.6144,69.6162

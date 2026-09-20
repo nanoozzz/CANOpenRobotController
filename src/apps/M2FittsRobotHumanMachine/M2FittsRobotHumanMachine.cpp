@@ -531,7 +531,7 @@ bool M2FittsRobotHumanMachine::loadTrialTable() {
     }
 
     //Otherwise one file per round, as in Block 1: <trials_dir>/<trials_prefix><n>.csv
-    for (int g = 1; g <= params_.nRounds; g++) {
+    for (int g = 1; g <= 1; g++) {
         std::vector<FittsTrial> round;
         bool hasAlpha = false;
         std::string file = trialsDir_ + "/" + "bal_group_all_alpha" + ".csv";
