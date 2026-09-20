@@ -172,6 +172,7 @@ struct FittsParams {
 
     // --- Breaks ---
     double roundBreakTime = 60.;
+    double roundBreakMinTime = 0.;  //!< A go cannot end a break before this [s] (0 = Block 1 behaviour)
     double readyHoldTime = 2.0;
 
     // --- Control / safety of robot-driven moves ---

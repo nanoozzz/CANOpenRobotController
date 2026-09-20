@@ -181,6 +181,8 @@ void M2FittsReadyState::entryCode(void) {
     atOrigin_ = false;
     tAtOrigin_ = 0.;
     ready_ = false;
+    //Same for the ready screen: start (or resume) only on a go given from now on
+    if (sm->ui.consumeGo()) spdlog::info("M2FittsRobotHuman: a go pressed before the ready screen was discarded.");
 
     sm->sendUIContext("RDY!", {requireGo_ ? 1. : 0., Xorigin_(0), Xorigin_(1)});
     if (requireGo_)
@@ -611,6 +613,9 @@ void M2FittsBreakState::entryCode(void) {
     duration_ = sm->breakDuration();
     sm->clearBreakDue();
     over_ = false;
+    //A go pressed earlier (e.g. SPACE on the display during the round) stays latched in the UI link until it is
+    //read, and would end this break on its first cycle. Discard it: only a go given during the break counts.
+    if (sm->ui.consumeGo()) spdlog::info("M2FittsRobotHuman: a go pressed before the break was discarded.");
 
     robot->initTorqueControl();
     robot->setEndEffForceWithCompensation(VM2::Zero(), true);
@@ -624,7 +629,17 @@ void M2FittsBreakState::duringCode(void) {
     if (iterations() % 2500 == 1)
         std::cout << "   " << std::fixed << std::setprecision(0) << std::max(0., duration_ - running()) << " s left..." << std::endl;
 
-    if (running() >= duration_ || sm->goSignal()) over_ = true;
+    if (running() >= duration_) {
+        over_ = true;
+        spdlog::info("M2FittsRobotHuman: break over ({:.0f} s).", running());
+    } else if (running() >= sm->p().roundBreakMinTime) {
+        if (const char *src = sm->goSource()) {
+            over_ = true;
+            spdlog::info("M2FittsRobotHuman: break ended early, after {:.1f} s, by {}.", running(), src);
+        }
+    } else {
+        sm->ui.consumeGo();  //a go given before round_break_min_time is ignored
+    }
 }
 
 void M2FittsBreakState::exitCode(void) {

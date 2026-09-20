@@ -112,6 +112,7 @@ class M2FittsRobotHumanMachine : public StateMachine {
     void sendUI(const std::string &cmd, const std::vector<double> &params = {});
     void sendUIContext(const std::string &cmd, const std::vector<double> &params = {});
     bool goSignal();
+    const char *goSource();  //!< Input that gave a go on this cycle (nullptr: none)
     bool abortSignal();
     bool uiReady() const { return !ui.required() || (ui.connected() && ui.handshakeDone()); }
 
@@ -142,7 +143,7 @@ class M2FittsRobotHumanMachine : public StateMachine {
 
     bool loadRobotController();  //!< PD gains of the robot-alone calibration (M2FittsMachine.yaml)
     bool readTrialCsv(const std::string &file, std::vector<FittsTrial> &trials, bool &hasAlpha) const;
-    bool loadTrialTable();       //!< <trials_prefix>1..n.csv (alpha column required)
+    bool loadTrialTable();       //!< trials_file, or <trials_dir>/<trials_prefix>1..n.csv (alpha column required)
     bool buildAlphaTable();      //!< ID -> alpha, checks range and one alpha per ID
     bool lookupAlpha(double id, double &alpha) const;
     bool checkTrialTable();
@@ -186,6 +187,7 @@ class M2FittsRobotHumanMachine : public StateMachine {
     std::string participant_ = "P00";
     std::string trialsDir_ = "../schedule";
     std::string trialsPrefix_ = "bal_group_";
+    std::string trialsFile_;  //!< trials_file: one csv holding every trial ("" = one file per round)
     std::string logDir_ = "../logs";
     std::string sessionTag_;
     std::string resultsPath_, rawPath_, paramsPath_;

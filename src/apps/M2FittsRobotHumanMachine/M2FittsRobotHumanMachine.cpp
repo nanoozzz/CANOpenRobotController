@@ -243,6 +243,7 @@ void M2FittsRobotHumanMachine::applyConfig() {
     block_ = cfgInt("block", block_);
     trialsDir_ = expandPath(cfgStr("trials_dir", trialsDir_));
     trialsPrefix_ = cfgStr("trials_prefix", trialsPrefix_);
+    trialsFile_ = expandPath(cfgStr("trials_file", ""));
     logDir_ = expandPath(cfgStr("results_dir", logDir_));
     bindIP_ = cfgStr("bind_ip", bindIP_);
     serverPort_ = cfgInt("port", serverPort_);
@@ -280,6 +281,7 @@ void M2FittsRobotHumanMachine::applyConfig() {
     params_.forceGraceTime = cfgDbl("force_grace_time", params_.forceGraceTime);
 
     params_.roundBreakTime = cfgDbl("round_break_time", params_.roundBreakTime);
+    params_.roundBreakMinTime = cfgDbl("round_break_min_time", params_.roundBreakMinTime);
     params_.readyHoldTime = cfgDbl("ready_hold_time", params_.readyHoldTime);
 
     params_.kPosVel = cfgDbl("k_pos_vel", params_.kPosVel);
@@ -499,6 +501,36 @@ bool M2FittsRobotHumanMachine::readTrialCsv(const std::string &file, std::vector
 
 bool M2FittsRobotHumanMachine::loadTrialTable() {
     blockTrials_.clear();
+
+    //One file holding every trial (trials_file), rows in presentation order: round r is made of rows
+    //(r-1)*trials_per_round+1 .. r*trials_per_round - the layout of schedule/bal_group_all.csv
+    if (!trialsFile_.empty()) {
+        std::vector<FittsTrial> all;
+        bool hasAlpha = false;
+        if (!readTrialCsv(trialsFile_, all, hasAlpha)) return false;
+        if (!hasAlpha) {
+            spdlog::critical("M2FittsRobotHuman: {} has no 'alpha' column. Block 2 needs the autonomy level of every trial.",
+                             trialsFile_);
+            return false;
+        }
+        const size_t expected = (size_t)std::max(0, params_.nRounds) * (size_t)std::max(0, params_.trialsPerRound);
+        if (params_.trialsPerRound <= 0 || all.size() != expected) {
+            spdlog::critical("M2FittsRobotHuman: {} holds {} trials, but n_rounds x trials_per_round = {} x {} = {}. Rounds "
+                             "are cut from consecutive rows, so the counts must match exactly.",
+                             trialsFile_, all.size(), params_.nRounds, params_.trialsPerRound, expected);
+            return false;
+        }
+        for (size_t i = 0; i < all.size(); i++) {
+            all[i].round = (int)(i / params_.trialsPerRound) + 1;
+            all[i].inRound = (int)(i % params_.trialsPerRound) + 1;
+            blockTrials_.push_back(all[i]);
+        }
+        spdlog::info("M2FittsRobotHuman: {} trials loaded from {} ({} rounds of {} consecutive rows).", all.size(),
+                     trialsFile_, params_.nRounds, params_.trialsPerRound);
+        return true;
+    }
+
+    //Otherwise one file per round, as in Block 1: <trials_dir>/<trials_prefix><n>.csv
     for (int g = 1; g <= params_.nRounds; g++) {
         std::vector<FittsTrial> round;
         bool hasAlpha = false;
@@ -665,6 +697,7 @@ bool M2FittsRobotHumanMachine::writeParametersFile(const std::string &file) cons
       << "block: " << block_ << "\n"
       << "trials_dir: " << trialsDir_ << "\n"
       << "trials_prefix: " << trialsPrefix_ << "\n"
+      << "trials_file: " << (trialsFile_.empty() ? std::string("(none - one file per round)") : trialsFile_) << "\n"
       << "results_file: " << resultsPath_ << "\n"
       << "raw_log_file: " << rawPath_ << "\n"
       << "\n# Task axis x: u = alpha*u_r + (1-alpha)*u_h, realised as F_cmd,x = alpha*F_pd,x - alpha*k_h*F_h,x\n"
@@ -707,7 +740,8 @@ bool M2FittsRobotHumanMachine::writeParametersFile(const std::string &file) cons
       << "driven_moves: k_pos_vel=" << p.kPosVel << " k_hold=" << p.kHold << " force_limit=" << p.forceLimit
       << " force_grace_time=" << p.forceGraceTime << " away_tolerance=" << p.awayTolerance
       << " away_settle_speed=" << p.awaySettleSpeed << " max_move_extra_time=" << p.maxMoveExtraTime << "\n"
-      << "breaks: round=" << p.roundBreakTime << " ready_hold=" << p.readyHoldTime << "\n"
+      << "breaks: every " << p.trialsPerRound << " trials, " << p.roundBreakTime << " s (a go cannot end one before "
+      << p.roundBreakMinTime << " s), ready_hold=" << p.readyHoldTime << "\n"
       << "structure: n_rounds=" << p.nRounds << " trials_per_round=" << p.trialsPerRound << " warm-up=none\n"
       << "ui: bind_ip=" << bindIP_ << " port=" << serverPort_ << " required=" << (uiRequired_ ? "true" : "false")
       << " divider=" << uiDivider_ << " display_gain=" << displayGain_ << "\n"
@@ -740,11 +774,13 @@ void M2FittsRobotHumanMachine::finaliseTrial(double returnTime, bool timedOut, b
         if (trialIdx_ >= blockTrials_.size()) {
             phase_ = PHASE_DONE;
             spdlog::info("M2FittsRobotHuman: Block {} completed ({} trials).", block_, blockTrials_.size());
-        } else if (blockTrials_[trialIdx_].round != blockTrials_[trialIdx_ - 1].round) {
+        } else if (params_.trialsPerRound > 0 && trialIdx_ % (size_t)params_.trialsPerRound == 0) {
+            //A break after every trials_per_round finished trials (Block 1's 45-trial rounds), whatever the file layout
             breakDue_ = true;
             breakDuration_ = params_.roundBreakTime;
-            spdlog::info("M2FittsRobotHuman: round {} completed. Break, then round {}.",
-                         blockTrials_[trialIdx_ - 1].round, blockTrials_[trialIdx_].round);
+            spdlog::info("M2FittsRobotHuman: {} trials done - break (up to {} s), then trials {}-{}.", trialIdx_,
+                         params_.roundBreakTime, trialIdx_ + 1,
+                         std::min(blockTrials_.size(), trialIdx_ + (size_t)params_.trialsPerRound));
         }
     }
     setCurrentTrial();
@@ -812,10 +848,17 @@ void M2FittsRobotHumanMachine::sendUIContext(const std::string &cmd, const std::
     ui.sendContext(cmd, params);
 }
 
+const char *M2FittsRobotHumanMachine::goSource() {
+    if (robot()->keyboard->getS()) return "keyboard 's'";
+    if (robot()->keyboard->getNb() == 1) return "keyboard '1'";
+    //Press edge, not level: a held or stuck button 1 (Block 1 used isButtonPressed) cannot fire on every cycle
+    if (robot()->joystick->isButtonTransition(1) > 0) return "joystick button 1";
+    if (ui.consumeGo()) return "display (SPACE)";
+    return nullptr;
+}
+
 bool M2FittsRobotHumanMachine::goSignal() {
-    if (robot()->keyboard->getS() || robot()->keyboard->getNb() == 1) return true;
-    if (robot()->joystick->isButtonPressed(1)) return true;
-    return ui.consumeGo();
+    return goSource() != nullptr;
 }
 
 bool M2FittsRobotHumanMachine::abortSignal() {
@@ -847,7 +890,8 @@ void M2FittsRobotHumanMachine::init() {
         return;
     }
     if (!loadTrialTable() || !buildAlphaTable()) {
-        spdlog::critical("M2FittsRobotHuman: trial/alpha tables could not be loaded (trials_dir = {}). Exiting...", trialsDir_);
+        spdlog::critical("M2FittsRobotHuman: trial/alpha tables could not be loaded ({}). Exiting...",
+                         trialsFile_.empty() ? "trials_dir = " + trialsDir_ : "trials_file = " + trialsFile_);
         std::raise(SIGTERM);
         return;
     }
@@ -872,6 +916,13 @@ void M2FittsRobotHumanMachine::init() {
 
     spdlog::info("M2FittsRobotHuman: participant {}, block {}: {} trials in {} rounds, no warm-up (shared control).",
                  participant_, block_, blockTrials_.size(), params_.nRounds);
+    {
+        const size_t every = (size_t)std::max(1, params_.trialsPerRound);
+        std::string at;
+        for (size_t k = every; k < blockTrials_.size(); k += every) at += (at.empty() ? "" : ", ") + std::to_string(k);
+        spdlog::info("M2FittsRobotHuman: breaks after trials {} ({} s each; a go ends one early, not before {} s).",
+                     at.empty() ? std::string("none") : at, params_.roundBreakTime, params_.roundBreakMinTime);
+    }
     spdlog::info("M2FittsRobotHuman: human force = {} x F_int, cancellation filter {} Hz, RobotM2 assist mirror g_p = {}.",
                  blend_.humanForceSign, humanForceFilterHz_, blend_.platformAssistGain);
     if (alphaOverride_ >= 0.)
