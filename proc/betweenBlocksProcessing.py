@@ -12,7 +12,7 @@ from scipy.stats import linregress
 # Human CSV
 # ------------------------------------------------------------
 
-human_csv = r"logs/M2FittsHuman_P01_B1_20260919-152657_trials.csv"
+human_csv = r"logs/M2FittsHuman_P0j_B1_20260922-144435_trials.csv"
 
 # Human:
 #   A   -> A_cm
@@ -20,12 +20,22 @@ human_csv = r"logs/M2FittsHuman_P01_B1_20260919-152657_trials.csv"
 #   ID  -> ID_bits
 #   MT  -> MT_move_s
 
+# ------------------------------------------------------------
+# Human trial filtering
+# ------------------------------------------------------------
+#
+# Only use formal Block 1 trials for human data.
+# Warmup trials are excluded.
+#
+
+HUMAN_BLOCK_COLUMN = "phase"
+HUMAN_PHASE = "block"
 
 # ------------------------------------------------------------
 # Robot CSV
 # ------------------------------------------------------------
 
-robot_csv = r"logs/M2Fitts_20260919_144537_trials.csv"
+robot_csv = r"logs/M2Fitts_20260922_120830_trials.csv"
 
 # Robot:
 #   A   -> D_file
@@ -93,11 +103,17 @@ print("\nHuman CSV columns:")
 print(human.columns.tolist())
 
 
+# ------------------------------------------------------------
+# Check required columns
+# ------------------------------------------------------------
+
 required_human = [
     "A_cm",
     "W_cm",
     "ID_bits",
-    "MT_move_s"
+    "MT_move_s",
+    "phase",
+    "success"
 ]
 
 missing_human = [
@@ -114,17 +130,26 @@ if missing_human:
     )
 
 
+# ------------------------------------------------------------
+# Keep only the columns we need
+# ------------------------------------------------------------
+
 human = human[
     [
         "A_cm",
         "W_cm",
         "ID_bits",
-        "MT_move_s"
+        "MT_move_s",
+        "phase",
+        "success"
     ]
 ].copy()
 
 
-# Convert to numeric
+# ------------------------------------------------------------
+# Convert numeric columns
+# ------------------------------------------------------------
+
 for col in [
     "A_cm",
     "W_cm",
@@ -137,7 +162,10 @@ for col in [
     )
 
 
+# ------------------------------------------------------------
 # Remove invalid rows
+# ------------------------------------------------------------
+
 human = human.dropna(
     subset=[
         "A_cm",
@@ -148,9 +176,70 @@ human = human.dropna(
 )
 
 
-# Round ID
+# ============================================================
+# FILTER HUMAN DATA
+# ============================================================
+#
+# Exclude warmup trials.
+# Only formal "block" trials are used.
+# ============================================================
+
+print("\nHuman phase counts BEFORE filtering:")
+print(human["phase"].value_counts(dropna=False))
+
+
+human = human[
+    human["phase"].astype(str).str.strip().str.lower()
+    == HUMAN_PHASE
+].copy()
+
+
+print("\nHuman phase filtering:")
+print(
+    f'Using only phase = "{HUMAN_PHASE}" trials.'
+)
+print(
+    f"Number of human trials after filtering: {len(human)}"
+)
+
+
+# ------------------------------------------------------------
+# Keep only successful trials
+# ------------------------------------------------------------
+
+human = human[
+    pd.to_numeric(human["success"], errors="coerce") == 1
+].copy()
+
+print(
+    f"Number of successful human trials used: {len(human)}"
+)
+
+
+# ------------------------------------------------------------
+# Recompute ID from A and W, then round
+# ------------------------------------------------------------
+#
+# Rounding the logged ID is fragile: the human file stores 4.9715,
+# which is a tie at 3 decimals (Python round -> 4.971, pandas
+# round -> 4.972). A mismatch would silently drop that ID in the
+# inner merge below and leave alpha = NaN in the schedule.
+#
+
+human_ID_exact = np.log2(
+    human["A_cm"] / human["W_cm"] + 1
+)
+
+max_dev = (human["ID_bits"] - human_ID_exact).abs().max()
+
+if max_dev > 1e-3:
+    print(
+        f"WARNING: logged human ID differs from log2(A/W+1) "
+        f"by up to {max_dev:.4f} bits"
+    )
+
 human["ID_bits"] = (
-    human["ID_bits"].round(ID_DECIMALS)
+    human_ID_exact.round(ID_DECIMALS)
 )
 
 
@@ -168,7 +257,8 @@ required_robot = [
     "D_file",
     "W_file",
     "ID_shannon_bits",
-    "mt_final_entry_s"
+    "mt_final_entry_s",
+    "success"
 ]
 
 missing_robot = [
@@ -184,6 +274,15 @@ if missing_robot:
         + "\n".join(robot.columns)
     )
 
+
+robot = robot[
+    pd.to_numeric(robot["success"], errors="coerce") == 1
+]
+
+# NOTE: mt_final_entry_s includes the robot's ~7 ms kinematic RT,
+# whereas the human MT_move_s excludes RT. The RT-free analogue is
+# mt_final_entry_kin_s (switching would lower alpha by <= 0.02 for
+# this dataset). Left unchanged so alpha stays as used in Block 2.
 
 robot = robot[
     [
@@ -219,10 +318,30 @@ robot = robot.dropna(
 )
 
 
-# Round ID
-robot["ID_shannon_bits"] = (
-    robot["ID_shannon_bits"].round(ID_DECIMALS)
+# Recompute ID from D and W, then round (see note in the human section)
+robot_ID_exact = np.log2(
+    robot["D_file"] / robot["W_file"] + 1
 )
+
+max_dev = (robot["ID_shannon_bits"] - robot_ID_exact).abs().max()
+
+if max_dev > 1e-3:
+    print(
+        f"WARNING: logged robot ID differs from log2(D/W+1) "
+        f"by up to {max_dev:.4f} bits"
+    )
+
+robot["ID_shannon_bits"] = (
+    robot_ID_exact.round(ID_DECIMALS)
+)
+
+
+# ============================================================
+# SIGN-AWARE FORMATTING (avoids "y = 0.2023x + -0.2064")
+# ============================================================
+
+def signed(value, decimals=4):
+    return f"{'-' if value < 0 else '+'} {abs(value):.{decimals}f}"
 
 
 # ============================================================
@@ -390,43 +509,167 @@ expected_ID = pd.merge(
 # MT_o
 # ============================================================
 #
-# MT_o = human movement time for the simplest task.
+# MT_o represents the movement time of the "operator-only"
+# component used in the shared-control alpha calculation.
 #
-# Here, the simplest task is defined as the smallest ID
-# present in BOTH datasets.
+# Two cases are considered:
 #
+# CASE 1:
+#   Human time at the simplest task > robot time at the
+#   hardest task.
+#
+#   In this case, MT_o is constant and equal to the human
+#   time for the simplest task.
+#
+#
+# CASE 2:
+#   Human time at the simplest task <= robot time at the
+#   hardest task.
+#
+#   In this case, MT_o varies linearly between:
+#
+#       (simplest ID, human MT)
+#
+#   and
+#
+#       (hardest ID, robot MT)
+#
+# ============================================================
+
+
+# ------------------------------------------------------------
+# Simplest task
+# ------------------------------------------------------------
+
+simplest_ID = expected_ID["ID"].min()
+
+MT_h_simple = expected_ID.loc[
+    expected_ID["ID"] == simplest_ID,
+    "MT_h"
+].iloc[0]
+
+
+# ------------------------------------------------------------
+# Hardest robot task
+# ------------------------------------------------------------
+
 highest_ID = robot_ID_reg["grouped"]["ID_shannon_bits"].max()
 
 highest_robot = robot_ID_reg["grouped"][
     robot_ID_reg["grouped"]["ID_shannon_bits"] == highest_ID
 ]
 
-print("\n=== Robot expected MT at highest ID ===")
-print(highest_robot[
-    ["ID_shannon_bits", "MT_expected_s"]
-].to_string(index=False))
+MT_r_hardest = highest_robot["MT_expected_s"].iloc[0]
 
-if len(expected_ID) == 0:
-    raise ValueError(
-        "No matching IDs were found between human and robot data."
+
+print("\n=== MT_o endpoints ===")
+print(f"Simplest ID       = {simplest_ID:.3f}")
+print(f"Human MT simple   = {MT_h_simple:.6f} s")
+print(f"Hardest robot ID  = {highest_ID:.3f}")
+print(f"Robot MT hardest  = {MT_r_hardest:.6f} s")
+
+
+# ============================================================
+# CALCULATE MT_o
+# ============================================================
+
+if MT_h_simple > MT_r_hardest:
+
+    # --------------------------------------------------------
+    # CASE 1:
+    # Human simplest task is slower than robot hardest task.
+    #
+    # MT_o is therefore constant.
+    # --------------------------------------------------------
+
+    print("\nMT_o CASE 1:")
+    print(
+        "Human MT at simplest task > "
+        "robot MT at hardest task."
     )
 
+    print(
+        "MT_o will be constant at the human simplest-task time."
+    )
 
-simplest_ID = expected_ID["ID"].min()
+    expected_ID["MT_o"] = MT_h_simple
 
 
-MT_o = max(expected_ID.loc[
-    expected_ID["ID"] == simplest_ID,
-    "MT_h"
-].iloc[0], highest_robot["MT_expected_s"].iloc[0])
+else:
 
+    # --------------------------------------------------------
+    # CASE 2:
+    # Human simplest task <= robot hardest task.
+    #
+    # MT_o follows the straight line connecting:
+    #
+    #   (simplest_ID, MT_h_simple)
+    #
+    #   (highest_ID, MT_r_hardest)
+    # --------------------------------------------------------
+
+    print("\nMT_o CASE 2:")
+    print(
+        "Human MT at simplest task <= "
+        "robot MT at hardest task."
+    )
+
+    print(
+        "MT_o will vary linearly between the two endpoints."
+    )
+
+    if np.isclose(highest_ID, simplest_ID):
+
+        # Avoid division by zero if there is only one ID.
+        expected_ID["MT_o"] = MT_h_simple
+
+    else:
+
+        MT_o_slope = (
+            MT_r_hardest - MT_h_simple
+        ) / (
+            highest_ID - simplest_ID
+        )
+
+        MT_o_intercept = (
+            MT_h_simple
+            - MT_o_slope * simplest_ID
+        )
+
+        expected_ID["MT_o"] = (
+            MT_o_slope * expected_ID["ID"]
+            + MT_o_intercept
+        )
+
+        print(
+            f"\nMT_o line:"
+            f"\nMT_o = {MT_o_slope:.6f} × ID "
+            f"{signed(MT_o_intercept, 6)}"
+        )
+
+
+# ============================================================
+# PRINT MT_o
+# ============================================================
 
 print("\n============================================================")
-print("SIMPLEST TASK")
+print("MT_o FOR EACH ID")
 print("============================================================")
 
-print(f"Simplest ID = {simplest_ID:.3f}")
-print(f"MT_o        = {MT_o:.6f} s")
+print(
+    expected_ID[
+        [
+            "ID",
+            "MT_h",
+            "MT_r",
+            "MT_o"
+        ]
+    ].to_string(
+        index=False,
+        float_format=lambda x: f"{x:.6f}"
+    )
+)
+
 
 # ============================================================
 # CALCULATE ALPHA
@@ -438,19 +681,21 @@ print(f"MT_o        = {MT_o:.6f} s")
 #     ----------------
 #     (MT_r - MT_h)
 #
-#
+# ============================================================
 
 expected_ID["alpha"] = (
-    (MT_o - expected_ID["MT_h"])
-    /
-    (
-        expected_ID["MT_r"]
-        - expected_ID["MT_h"]
-    )
+    expected_ID["MT_o"]
+    - expected_ID["MT_h"]
+) / (
+    expected_ID["MT_r"]
+    - expected_ID["MT_h"]
 )
 
 
-# Handle division by zero
+# ============================================================
+# HANDLE DIVISION BY ZERO
+# ============================================================
+
 expected_ID.loc[
     np.isclose(
         expected_ID["MT_r"],
@@ -459,6 +704,7 @@ expected_ID.loc[
     "alpha"
 ] = np.nan
 
+
 # ============================================================
 # CLAMP ALPHA TO [0, 1]
 # ============================================================
@@ -466,14 +712,15 @@ expected_ID.loc[
 expected_ID["alpha"] = expected_ID["alpha"].clip(
     lower=0.0,
     upper=1.0
-)
+) + 0.0   # "+ 0.0" turns -0.0 into 0.0 (the "α: -0.00" label)
+
 
 # ============================================================
-# PRINT EXPECTED MT + ALPHA
+# PRINT EXPECTED MT + MT_o + ALPHA
 # ============================================================
 
 print("\n============================================================")
-print("EXPECTED MOVEMENT TIME + ALPHA FOR EACH ID")
+print("EXPECTED MOVEMENT TIME + MT_o + ALPHA FOR EACH ID")
 print("============================================================")
 
 print(
@@ -526,10 +773,19 @@ schedule["ID"] = pd.to_numeric(
 )
 
 
-# Round schedule IDs using the same precision
-schedule["ID"] = (
-    schedule["ID"].round(ID_DECIMALS)
-)
+# Round schedule IDs using the same precision.
+# If the schedule has A and W columns, recompute the ID from them
+# (same tie-safe key as the human and robot data).
+if {"A", "W"}.issubset(schedule.columns):
+    schedule["ID"] = np.log2(
+        pd.to_numeric(schedule["A"], errors="coerce")
+        / pd.to_numeric(schedule["W"], errors="coerce")
+        + 1
+    ).round(ID_DECIMALS)
+else:
+    schedule["ID"] = (
+        schedule["ID"].round(ID_DECIMALS)
+    )
 
 
 # Create ID -> alpha lookup
@@ -545,6 +801,15 @@ alpha_map = dict(
 schedule["alpha"] = (
     schedule["ID"].map(alpha_map)
 )
+
+unmatched = schedule["alpha"].isna()
+
+if unmatched.any():
+    raise ValueError(
+        f"\n{unmatched.sum()} schedule rows received no alpha "
+        f"(ID not found in the human/robot table): "
+        f"{sorted(schedule.loc[unmatched, 'ID'].unique())}"
+    )
 
 
 # Save
@@ -634,7 +899,7 @@ def make_plot(mode):
         robot_x = "W_file"
 
         human_xlabel = "W (cm)"
-        robot_xlabel = "W"
+        robot_xlabel = "W (cm)"
 
         title = "Human vs Robot Movement Time vs W"
 
@@ -692,8 +957,8 @@ def make_plot(mode):
     print("\nHUMAN")
     print(
         f"MT_h = "
-        f"{human_reg['slope']:.6f} × x + "
-        f"{human_reg['intercept']:.6f}"
+        f"{human_reg['slope']:.6f} × x "
+        f"{signed(human_reg['intercept'], 6)}"
     )
 
     print(
@@ -703,8 +968,8 @@ def make_plot(mode):
     print("\nROBOT")
     print(
         f"MT_r = "
-        f"{robot_reg['slope']:.6f} × x + "
-        f"{robot_reg['intercept']:.6f}"
+        f"{robot_reg['slope']:.6f} × x "
+        f"{signed(robot_reg['intercept'], 6)}"
     )
 
     print(
@@ -871,6 +1136,18 @@ def make_plot(mode):
         )
 
 
+    # Legend entries for the large markers: they are A×W CONDITION
+    # means (3 per ID), not per-ID means.
+    plt.scatter(
+        [], [], marker="o", s=90, facecolors="white",
+        edgecolors="black", label="Human A×W condition mean"
+    )
+    plt.scatter(
+        [], [], marker="^", s=100, facecolors="white",
+        edgecolors="black", label="Robot A×W condition mean"
+    )
+
+
     # ========================================================
     # HUMAN REGRESSION LINE
     # ========================================================
@@ -995,13 +1272,14 @@ def make_plot(mode):
     equation_text = (
         "Human:\n"
         f"$y = {human_reg['slope']:.4f}x "
-        f"+ {human_reg['intercept']:.4f}$\n"
+        f"{signed(human_reg['intercept'])}$\n"
         f"$R^2 = {human_reg['r_squared']:.4f}$\n\n"
 
         "Robot:\n"
         f"$y = {robot_reg['slope']:.4f}x "
-        f"+ {robot_reg['intercept']:.4f}$\n"
-        f"$R^2 = {robot_reg['r_squared']:.4f}$"
+        f"{signed(robot_reg['intercept'])}$\n"
+        f"$R^2 = {robot_reg['r_squared']:.4f}$\n"
+        "(fits to A×W condition means)"
     )
 
 

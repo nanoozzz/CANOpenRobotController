@@ -212,6 +212,8 @@ std::vector<std::string> validateConfig(const FittsConfig &c) {
     req((c.pd.kp.array() > 0.).all() && (c.pd.kd.array() >= 0.).all(), "pd.kp must be > 0 and pd.kd >= 0");
     req(c.pd.f_max > 0., "pd.f_max must be > 0");
     req(c.pd.vel_filter_hz >= 0., "pd.velocity_filter_hz must be >= 0");
+    req((c.pd.stiction_comp.array() >= 0.).all() && c.pd.stiction_rest_speed > 0. && c.pd.stiction_deadband >= 0.,
+        "pd.stiction_comp must be >= 0, pd.stiction_rest_speed > 0 and pd.stiction_deadband >= 0");
     req(c.max_speed > 0., "safety.max_speed must be > 0");
     req(c.brake_damping >= 0., "safety.brake_damping must be >= 0");
     req(c.workspace_x(0) < c.workspace_x(1) && c.workspace_y(0) < c.workspace_y(1), "safety.workspace ranges must be [min, max]");
@@ -272,6 +274,8 @@ std::string describeConfig(const FittsConfig &c) {
       << "pd.kd_Ns_per_m: [" << c.pd.kd(0) << ", " << c.pd.kd(1) << "]\n"
       << "pd.f_max_N: " << c.pd.f_max << "\n"
       << "pd.velocity_filter_hz: " << c.pd.vel_filter_hz << "\n"
+      << "pd.stiction_comp_N: [" << c.pd.stiction_comp(0) << ", " << c.pd.stiction_comp(1) << "] (below "
+      << c.pd.stiction_rest_speed << " m/s, outside " << c.pd.stiction_deadband << " m of the set-point)\n"
       << "pd.friction_compensation: " << (c.friction_compensation ? "true" : "false") << "\n"
       << "safety.max_speed_mps: " << c.max_speed << "\n"
       << "safety.workspace_x_m: [" << c.workspace_x(0) << ", " << c.workspace_x(1) << "]\n"
@@ -328,6 +332,13 @@ Vec2 PDController::compute(const Vec2 &x_ref, const Vec2 &v_ref, const Vec2 &x, 
             sat = true;
         }
     }
+    // Stiction compensation while the handle is stuck away from the set-point: RobotM2 compensates friction only
+    // above its 5 cm/s velocity threshold, so near rest the unsaturated spring can stall short of a small target.
+    // Same term as fsc::SharedControlLaw in M2FittsRobotHumanMachine, where it is scaled by alpha.
+    for (int i = 0; i < 2; ++i)
+        if (g_.stiction_comp(i) > 0. && std::fabs(v(i)) < g_.stiction_rest_speed &&
+            std::fabs(x_ref(i) - x(i)) > g_.stiction_deadband && F(i) != 0.)
+            F(i) += (F(i) > 0.) ? g_.stiction_comp(i) : -g_.stiction_comp(i);
     if (saturated) *saturated = sat;
     return F;
 }

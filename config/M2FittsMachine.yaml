@@ -34,6 +34,13 @@ M2FittsMachine:
     f_max: 30.0                 # per-axis saturation of the PD force (commissioning value)
     velocity_filter_hz: 30.0     # low-pass cut-off on measured velocity for the D term (0 = off)
     friction_compensation: true  # false = pure PD; true = PD + RobotM2 friction feedforward
+    stiction_comp: [3.0, 0.0]               # breakaway force added to the robot term (x alpha) while the handle is stuck
+                                        # away from the target centre. RobotM2 compensates friction only above
+                                        # 5 cm/s, so the PD spring can stall short of small targets. 0 = off.
+                                        # Tune: raise until the robot enters W = 0.5 cm at high alpha without
+                                        # hunting around the centre                              [0]
+    stiction_rest_speed: 0.01              # the handle counts as stuck below this speed [m/s]     [0.01]
+    stiction_deadband: 0.0005            # no compensation within this distance of the centre [m] [0.0005]
 
   safety:
     max_speed: 1.5            # app-level speed limit -> FaultState (RobotM2 itself disables at 3 m/s)

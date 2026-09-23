@@ -42,6 +42,9 @@ struct PDGains {
     Vec2 kd = Vec2(80., 80.);    //!< Derivative gain [N.s/m]
     double f_max = 30.;          //!< Per-axis force saturation [N]
     double vel_filter_hz = 0.;   //!< 1st-order low-pass cut-off on measured velocity [Hz]; <= 0 disables it
+    Vec2 stiction_comp = Vec2::Zero();  //!< Breakaway force added while the handle is stuck away from the set-point [N]; 0 = off
+    double stiction_rest_speed = 0.01;  //!< Below this speed the handle counts as stuck [m/s]
+    double stiction_deadband = 0.0005;  //!< No compensation within this distance of the set-point [m]
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 };
 
@@ -70,7 +73,7 @@ struct FittsConfig {
     double homing_ref_speed = 0.05;                 //!< Reference speed from calibration corner to home [m/s]
     // Controller
     PDGains pd;
-    bool friction_compensation = false;             //!< Add RobotM2 friction feedforward to the PD force
+    bool friction_compensation = true;             //!< Add RobotM2 friction feedforward to the PD force
     // Safety and workspace
     double max_speed = 0.8;                         //!< App-level speed limit -> FaultState [m/s]
     Vec2 workspace_x = Vec2(0.0, 0.625);            //!< Joint range of x as defined in RobotM2 (CORC) [m]

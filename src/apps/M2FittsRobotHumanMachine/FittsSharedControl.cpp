@@ -110,8 +110,17 @@ BlendOutput SharedControlLaw::compute(double alpha, const Vec2 &xRef, const Vec2
     o.cancelSaturated = clampAbs(cancel, p_.cancelFMax);
     o.F_cancel = cancel;
 
+    // Robot term: the PD of M2FittsMachine, plus its stiction compensation while the handle is stuck away from the
+    // target centre (same law as fitts::PDController), both scaled by alpha
+    double robot = alpha * o.F_pd(0);
+    if (p_.robotStictionComp > 0. && std::fabs(v(0)) < p_.stictionRestSpeed &&
+        std::fabs(xRef(0) - x(0)) > p_.stictionDeadband && o.F_pd(0) != 0.) {
+        o.F_stiction = alpha * p_.robotStictionComp * (o.F_pd(0) > 0. ? 1. : -1.);
+        robot += o.F_stiction;
+    }
+
     // Blend on x; Block 1 channel on y
-    double fx = alpha * o.F_pd(0) + cancel;
+    double fx = robot + cancel;
     o.cmdSaturated = clampAbs(fx, p_.cmdFMax);
     o.F_cmd = Vec2(fx, channelForce(p_, xRef(1), x(1), v(1)));
     o.valid = true;

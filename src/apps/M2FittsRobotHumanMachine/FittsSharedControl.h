@@ -98,8 +98,13 @@ struct BlendParams {
     double platformForceThreshold = 0.05;  //!< threshold_f of that function [N]
     double platformVelThreshold = 0.05;    //!< threshold_v of that function [m/s]
     // Safety saturations (<= 0 disables)
-    double cancelFMax = 30.;  //!< Cap on |alpha * k_h * F_h,x| [N]
-    double cmdFMax = 50.;     //!< Cap on |F_cmd,x| [N]
+    double cancelFMax = 40.;  //!< Cap on |alpha * k_h * F_h,x| [N]; keep >= reach_force_limit (else a participant force
+                              //!< between the two leaks through at alpha = 1 without ending the trial)
+    double cmdFMax = 75.;     //!< Cap on |F_cmd,x| [N]; keep >= f_max + cancelFMax + stiction compensation
+    // Robot stiction compensation (part of u_r; from M2FittsMachine.yaml pd.stiction_*; <= 0 disables)
+    double robotStictionComp = 0.;     //!< Breakaway force added to the robot term (x alpha) while stuck [N]
+    double stictionRestSpeed = 0.01;   //!< Below this speed the handle counts as stuck [m/s]
+    double stictionDeadband = 0.0005;  //!< No compensation within this distance of the target centre [m]
     // Block 1 virtual channel on y (task constraint, alpha-independent)
     bool useYChannel = true;
     double channelK = 800.;         //!< [N/m]
@@ -113,6 +118,7 @@ struct BlendOutput {
     Vec2 F_cmd = Vec2::Zero();  //!< Force to send with RobotM2::setEndEffForceWithCompensation(F_cmd, true) [N]
     Vec2 F_pd = Vec2::Zero();   //!< u_r: PD force (x is used; y is computed but not applied) [N]
     double F_cancel = 0.;       //!< -alpha * k_h * F_h,x after saturation [N]
+    double F_stiction = 0.;     //!< Robot stiction compensation included in F_cmd,x [N]
     double k_h = 1.;            //!< Gain of the Block 1 human channel on this sample
     bool pdSaturated = false;   //!< PD saturated on x (part of u_r's definition, as in the robot-alone run)
     bool cancelSaturated = false;

@@ -365,6 +365,12 @@ bool M2FittsRobotHumanMachine::loadRobotController() {
             //Optional keys: M2FittsMachine's in-code defaults when absent (FittsCore.h)
             pdGains_.vel_filter_hz = pd["velocity_filter_hz"] ? pd["velocity_filter_hz"].as<double>() : 0.;
             const bool robotFrictionComp = pd["friction_compensation"] ? pd["friction_compensation"].as<bool>() : false;
+            //Stiction compensation: part of u_r, same values as M2FittsMachine (x only here, scaled by alpha). Off if absent.
+            if (pd["stiction_comp"]) blend_.robotStictionComp = vec2("stiction_comp")(0);
+            if (pd["stiction_rest_speed"]) blend_.stictionRestSpeed = pd["stiction_rest_speed"].as<double>();
+            if (pd["stiction_deadband"]) blend_.stictionDeadband = pd["stiction_deadband"].as<double>();
+            if (blend_.robotStictionComp < 0. || !(blend_.stictionRestSpeed > 0.) || blend_.stictionDeadband < 0.)
+                throw std::runtime_error("invalid pd.stiction_* values (comp >= 0, rest speed > 0, deadband >= 0 required)");
 
             if (!(pdGains_.kp.array() > 0.).all() || !(pdGains_.kd.array() >= 0.).all() || !(pdGains_.f_max > 0.) ||
                 pdGains_.vel_filter_hz < 0.)
@@ -375,6 +381,10 @@ bool M2FittsRobotHumanMachine::loadRobotController() {
                          "f_max = {} N, velocity filter = {} Hz.",
                          file, pdGains_.kp(0), pdGains_.kp(1), pdGains_.kd(0), pdGains_.kd(1), pdGains_.f_max,
                          pdGains_.vel_filter_hz);
+            spdlog::info("M2FittsRobotHuman: robot stiction compensation {} N (x alpha) while slower than {} m/s and more than "
+                         "{} mm from the target centre{}.",
+                         blend_.robotStictionComp, blend_.stictionRestSpeed, 1000. * blend_.stictionDeadband,
+                         blend_.robotStictionComp > 0. ? "" : " (off)");
             if (!robotFrictionComp)
                 spdlog::warn("M2FittsRobotHuman: {} has pd.friction_compensation = false, whereas Block 1 and Block 2 run "
                              "RobotM2's friction compensation: the alpha = 1 end of Block 2 then differs from the "
@@ -708,6 +718,8 @@ bool M2FittsRobotHumanMachine::writeParametersFile(const std::string &file) cons
       << "pd.kd_Ns_per_m: [" << pdGains_.kd(0) << ", " << pdGains_.kd(1) << "]\n"
       << "pd.f_max_N: " << pdGains_.f_max << "\n"
       << "pd.velocity_filter_hz: " << pdGains_.vel_filter_hz << "\n"
+      << "pd.stiction_comp_x_N: " << blend_.robotStictionComp << " (x alpha, below " << blend_.stictionRestSpeed
+      << " m/s, outside " << blend_.stictionDeadband << " m of the target centre)\n"
       << "robotm2_friction_compensation: " << (frictionComp_ ? "true" : "false") << "\n"
       << "alpha_override: " << (alphaOverride_ >= 0. ? num(alphaOverride_, 4) : std::string("off")) << "\n"
       << "human_force_sign: " << b.humanForceSign << "\n"
@@ -889,6 +901,16 @@ void M2FittsRobotHumanMachine::init() {
         std::raise(SIGTERM);
         return;
     }
+    //Saturations that would let part of the participant's force through at alpha = 1 (the robot then stops short)
+    if (blend_.cancelFMax > 0. && params_.reachForceLimit > 0. && blend_.cancelFMax < params_.reachForceLimit)
+        spdlog::warn("M2FittsRobotHuman: cancel_f_max ({} N) < reach_force_limit ({} N): at alpha = 1 a participant force "
+                     "between the two is only partly cancelled and the trial is not ended. Set cancel_f_max >= "
+                     "reach_force_limit.",
+                     blend_.cancelFMax, params_.reachForceLimit);
+    if (blend_.cmdFMax > 0. && blend_.cmdFMax < pdGains_.f_max + blend_.cancelFMax + blend_.robotStictionComp)
+        spdlog::warn("M2FittsRobotHuman: command_f_max ({} N) < f_max + cancel_f_max + stiction_comp ({} N): the command "
+                     "cap can clip the blend.",
+                     blend_.cmdFMax, pdGains_.f_max + blend_.cancelFMax + blend_.robotStictionComp);
     if (!loadTrialTable() || !buildAlphaTable()) {
         spdlog::critical("M2FittsRobotHuman: trial/alpha tables could not be loaded ({}). Exiting...",
                          trialsFile_.empty() ? "trials_dir = " + trialsDir_ : "trials_file = " + trialsFile_);

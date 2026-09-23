@@ -170,12 +170,16 @@ void M2FittsMachine::loadSetup() {
         readValue(hs, "home_settling", "homing_ref_speed", c.homing_ref_speed);
 
         const YAML::Node pd = app["pd"];
-        checkKeys(pd, "pd", {"kp", "kd", "f_max", "velocity_filter_hz", "friction_compensation"});
+        checkKeys(pd, "pd", {"kp", "kd", "f_max", "velocity_filter_hz", "friction_compensation", "stiction_comp",
+                             "stiction_rest_speed", "stiction_deadband"});
         readVec2(pd, "pd", "kp", c.pd.kp);
         readVec2(pd, "pd", "kd", c.pd.kd);
         readValue(pd, "pd", "f_max", c.pd.f_max);
         readValue(pd, "pd", "velocity_filter_hz", c.pd.vel_filter_hz);
         readValue(pd, "pd", "friction_compensation", c.friction_compensation);
+        readVec2(pd, "pd", "stiction_comp", c.pd.stiction_comp);
+        readValue(pd, "pd", "stiction_rest_speed", c.pd.stiction_rest_speed);
+        readValue(pd, "pd", "stiction_deadband", c.pd.stiction_deadband);
 
         const YAML::Node sf = app["safety"];
         checkKeys(sf, "safety", {"max_speed", "workspace_x", "workspace_y", "workspace_tolerance", "target_margin", "brake_damping"});
