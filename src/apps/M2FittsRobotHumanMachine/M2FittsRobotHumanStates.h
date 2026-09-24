@@ -17,8 +17,9 @@
  * In the Reach state the robot applies, on the task axis,
  *      F_cmd,x = alpha * F_pd,x - alpha * k_h * F_h,x            (FittsSharedControl.h)
  * with alpha read per trial from the trial csv. Display protocol, timing, detection and every Block 1
- * measure are unchanged; force-sharing measures are added. Block 2 has no warm-up: the session starts
- * with round 1 after the go signal.
+ * measure are unchanged; force-sharing measures are added. A session runs three sub-blocks: the warm-up
+ * (warmup_file: the participant experiences the autonomy levels), the block itself, and the cool-down
+ * (cooldown_file: perceived autonomy). Each starts on a go signal, with a rest in between.
  *
  * \version 1.0
  * \date 2026-09-18
@@ -43,9 +44,11 @@ inline double fittsNaN() { return std::numeric_limits<double>::quiet_NaN(); }
 
 /** \brief Session phase. */
 enum FittsPhase {
-    PHASE_WARMUP = 0,  //!< Not used in Block 2 (no warm-up); kept because the value is part of the display protocol
-    PHASE_BLOCK = 1,   //!< Block 2: nRounds x trialsPerRound trials
-    PHASE_DONE = 2     //!< Session complete
+    PHASE_WARMUP = 0,   //!< Warm-up sub-block: the trials of warmup_file, in file order
+    PHASE_BLOCK = 1,    //!< Block 2: nRounds x trialsPerRound trials
+    PHASE_DONE = 2,     //!< Session complete
+    PHASE_COOLDOWN = 3  //!< Cool-down sub-block (cooldown_file). The display protocol only knows 0-2, so these
+                        //!< trials are announced as PHASE_WARMUP (M2FittsRobotHumanMachine::uiPhase())
 };
 
 /** \brief State code of the continuous log. 0-7 as in Block 1 (FittsStateCode in the Unity client).
@@ -173,6 +176,8 @@ struct FittsParams {
     // --- Breaks ---
     double roundBreakTime = 60.;
     double roundBreakMinTime = 0.;  //!< A go cannot end a break before this [s] (0 = Block 1 behaviour)
+    double warmupRestTime = 60.;    //!< Rest between the warm-up sub-block and the block [s]
+    double cooldownRestTime = 60.;  //!< Rest between the block and the cool-down sub-block [s]
     double readyHoldTime = 2.0;
 
     // --- Control / safety of robot-driven moves ---
@@ -186,6 +191,11 @@ struct FittsParams {
     // --- Structure ---
     int nRounds = 4;
     int trialsPerRound = 45;
+    int warmupRepeats = 1;          //!< Passes through warmup_file (0 = no warm-up)
+    int cooldownRepeats = 1;        //!< Passes through cooldown_file (0 = no cool-down)
+    bool warmupRequireGo = false;   //!< true: every warm-up trial waits for a go
+    bool cooldownRequireGo = true;  //!< true: every cool-down trial waits for a go (time to ask for the rating)
+    bool requireGoEachSubBlock = false;  //!< true: the first trial of the block and of each sub-block waits for a go
 
     // --- Block 2: safety of the shared reach ---
     double reachForceLimit = 40.;      //!< |interaction force| above this for forceLimitTime ends the reach [N]; 0 = off

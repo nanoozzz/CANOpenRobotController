@@ -185,8 +185,16 @@ void M2FittsReadyState::entryCode(void) {
     if (sm->ui.consumeGo()) spdlog::info("M2FittsRobotHuman: a go pressed before the ready screen was discarded.");
 
     sm->sendUIContext("RDY!", {requireGo_ ? 1. : 0., Xorigin_(0), Xorigin_(1)});
-    if (requireGo_)
-        std::cout << "\nHold the handle. Press 's' (or joystick button 1, or the start control in the UI) to begin.\n" << std::endl;
+    if (requireGo_) {
+        const char *what = (sm->phase() == PHASE_WARMUP)     ? "warm-up trial"
+                           : (sm->phase() == PHASE_COOLDOWN) ? "cool-down trial (ask for the autonomy rating first)"
+                                                             : "trial";
+        std::cout << "\nNext: " << what << " " << sm->currentTrial().index << " of "
+                  << (sm->phase() == PHASE_WARMUP ? sm->nWarmupTrials()
+                      : sm->phase() == PHASE_COOLDOWN ? sm->nCooldownTrials() : sm->nBlockTrials())
+                  << " (alpha " << sm->appliedAlpha(sm->currentTrial()) << "). Hold the handle. "
+                  << "Press 's' (or joystick button 1, or the start control in the UI) to begin.\n" << std::endl;
+    }
     else
         std::cout << "Resuming in " << sm->p().readyHoldTime << " s (hold the handle at the start position)..." << std::endl;
 }
@@ -254,7 +262,7 @@ void M2FittsSharedReachState::entryCode(void) {
     applySharedControl(0.);
 
     //Same TRIA message as Block 1 (alpha is not sent to the display)
-    sm->sendUIContext("TRIA", {(double)sm->phase(), (double)trial_.round, (double)trial_.inRound,
+    sm->sendUIContext("TRIA", {sm->uiPhase(), (double)trial_.round, (double)trial_.inRound,
                                (double)trial_.index, trial_.A_cm, trial_.W_cm, trial_.ID_bits,
                                Xtarget_(0), Xtarget_(1), halfW_, Xorigin_(0), Xorigin_(1),
                                sm->p().dwellTime, sm->p().maxTrialTime});
@@ -381,7 +389,7 @@ void M2FittsSharedReachState::duringCode(void) {
 
         sm->recordReach(res_);
         sm->sendUI("HITT", {(double)trial_.index, res_.MT, (double)res_.nEntries, res_.x_sel_cm});
-        std::cout << "[block]   "
+        std::cout << (res_.phase == PHASE_WARMUP ? "[warm-up] " : res_.phase == PHASE_COOLDOWN ? "[cool-dn] " : "[block]   ")
                   << "trial " << std::setw(4) << trial_.index
                   << " | A=" << std::setw(8) << std::fixed << std::setprecision(4) << trial_.A_cm
                   << " W=" << std::setw(8) << trial_.W_cm
@@ -619,7 +627,7 @@ void M2FittsBreakState::entryCode(void) {
 
     robot->initTorqueControl();
     robot->setEndEffForceWithCompensation(VM2::Zero(), true);
-    sm->sendUIContext("REST", {duration_, (double)sm->trialsDone(), (double)sm->phase()});
+    sm->sendUIContext("REST", {duration_, (double)sm->trialsDone(), sm->uiPhase()});
     std::cout << "\n--- Break: up to " << duration_ << " s. Press 's' (or the skip control in the UI) to continue earlier. ---" << std::endl;
 }
 

@@ -74,9 +74,22 @@ class M2FittsRobotHumanMachine : public StateMachine {
     bool breakDue() const { return breakDue_; }
     double breakDuration() const { return breakDuration_; }
     void clearBreakDue() { breakDue_ = false; }
-    bool requireGoSignal() const { return trialsDone_ == 0; }
+    //! A go is needed for the first trial of the session, for every trial of a sub-block whose *_require_go flag
+    //! is set (the cool-down, to leave time for the rating question), and, if require_go_each_sub_block is set, for
+    //! the first trial of each sub-block. Everything else resumes by itself after the rest, as in Block 1.
+    bool requireGoSignal() const {
+        if (trialsDone_ == 0) return true;
+        if (trialIdx_ == 0 && params_.requireGoEachSubBlock) return true;
+        if (phase_ == PHASE_WARMUP) return params_.warmupRequireGo;
+        if (phase_ == PHASE_COOLDOWN) return params_.cooldownRequireGo;
+        return false;
+    }
+    //! Phase announced to the display, which only knows warm-up/block/done: the cool-down is sent as warm-up
+    double uiPhase() const { return (phase_ == PHASE_COOLDOWN) ? (double)PHASE_WARMUP : (double)phase_; }
     int trialsDone() const { return trialsDone_; }
     int blockNb() const { return block_; }
+    size_t nWarmupTrials() const { return warmupTrials_.size(); }
+    size_t nCooldownTrials() const { return cooldownTrials_.size(); }
     size_t nBlockTrials() const { return blockTrials_.size(); }
     const std::string &participant() const { return participant_; }
 
@@ -146,6 +159,7 @@ class M2FittsRobotHumanMachine : public StateMachine {
     bool loadTrialTable();       //!< trials_file, or <trials_dir>/<trials_prefix>1..n.csv (alpha column required)
     bool buildAlphaTable();      //!< ID -> alpha, checks range and one alpha per ID
     bool lookupAlpha(double id, double &alpha) const;
+    bool loadSubBlock(const std::string &file, int repeats, std::vector<FittsTrial> &trials, const char *label);
     bool checkTrialTable();
     bool openResultsFile();
     void writeResultRow(const FittsTrialResult &r);
@@ -155,6 +169,8 @@ class M2FittsRobotHumanMachine : public StateMachine {
 
     //---- protocol state
     FittsParams params_;
+    std::vector<FittsTrial> warmupTrials_;
+    std::vector<FittsTrial> cooldownTrials_;
     std::vector<FittsTrial> blockTrials_;
     FittsTrial currentTrial_;
     FittsPhase phase_ = PHASE_BLOCK;
@@ -188,6 +204,8 @@ class M2FittsRobotHumanMachine : public StateMachine {
     std::string trialsDir_ = "../schedule";
     std::string trialsPrefix_ = "bal_group_";
     std::string trialsFile_;  //!< trials_file: one csv holding every trial ("" = one file per round)
+    std::string warmupFile_;    //!< warmup_file: trials of the warm-up sub-block
+    std::string cooldownFile_;  //!< cooldown_file: trials of the cool-down sub-block
     std::string logDir_ = "../logs";
     std::string sessionTag_;
     std::string resultsPath_, rawPath_, paramsPath_;

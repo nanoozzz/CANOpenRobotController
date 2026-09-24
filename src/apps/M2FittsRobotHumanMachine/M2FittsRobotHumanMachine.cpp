@@ -244,6 +244,10 @@ void M2FittsRobotHumanMachine::applyConfig() {
     trialsDir_ = expandPath(cfgStr("trials_dir", trialsDir_));
     trialsPrefix_ = cfgStr("trials_prefix", trialsPrefix_);
     trialsFile_ = expandPath(cfgStr("trials_file", ""));
+    warmupFile_ = expandPath(cfgStr("warmup_file", ""));
+    if (warmupFile_.empty()) warmupFile_ = trialsDir_ + "/warmup.csv";
+    cooldownFile_ = expandPath(cfgStr("cooldown_file", ""));
+    if (cooldownFile_.empty()) cooldownFile_ = trialsDir_ + "/cooldown.csv";
     logDir_ = expandPath(cfgStr("results_dir", logDir_));
     bindIP_ = cfgStr("bind_ip", bindIP_);
     serverPort_ = cfgInt("port", serverPort_);
@@ -282,6 +286,8 @@ void M2FittsRobotHumanMachine::applyConfig() {
 
     params_.roundBreakTime = cfgDbl("round_break_time", params_.roundBreakTime);
     params_.roundBreakMinTime = cfgDbl("round_break_min_time", params_.roundBreakMinTime);
+    params_.warmupRestTime = cfgDbl("warmup_rest_time", params_.warmupRestTime);
+    params_.cooldownRestTime = cfgDbl("cooldown_rest_time", params_.cooldownRestTime);
     params_.readyHoldTime = cfgDbl("ready_hold_time", params_.readyHoldTime);
 
     params_.kPosVel = cfgDbl("k_pos_vel", params_.kPosVel);
@@ -293,6 +299,11 @@ void M2FittsRobotHumanMachine::applyConfig() {
 
     params_.nRounds = cfgInt("n_rounds", params_.nRounds);
     params_.trialsPerRound = cfgInt("trials_per_round", params_.trialsPerRound);
+    params_.warmupRepeats = cfgInt("warmup_repeats", params_.warmupRepeats);
+    params_.cooldownRepeats = cfgInt("cooldown_repeats", params_.cooldownRepeats);
+    params_.warmupRequireGo = cfgBool("warmup_require_go", params_.warmupRequireGo);
+    params_.cooldownRequireGo = cfgBool("cooldown_require_go", params_.cooldownRequireGo);
+    params_.requireGoEachSubBlock = cfgBool("require_go_each_sub_block", params_.requireGoEachSubBlock);
 
     //---- Block 2: safety of the shared reach
     params_.reachForceLimit = cfgDbl("reach_force_limit", params_.reachForceLimit);
@@ -600,6 +611,59 @@ bool M2FittsRobotHumanMachine::buildAlphaTable() {
     return !alphaTable_.empty();
 }
 
+/**
+ * \brief Loads a sub-block (warm-up or cool-down) from its own csv: every row is a trial, in file order.
+ *
+ * The file has the columns of the main trial table. Its 'alpha' column is taken as it stands, because a
+ * sub-block deliberately uses several alpha values at one ID; it is therefore NOT checked against the block's
+ * ID -> alpha table. Rows without an alpha column fall back to that table.
+ */
+bool M2FittsRobotHumanMachine::loadSubBlock(const std::string &file, int repeats, std::vector<FittsTrial> &trials,
+                                            const char *label) {
+    trials.clear();
+    if (repeats <= 0) {
+        spdlog::info("M2FittsRobotHuman: no {} trials (repeats = {}).", label, repeats);
+        return true;
+    }
+
+    std::vector<FittsTrial> rows;
+    bool hasAlpha = false;
+    if (!readTrialCsv(file, rows, hasAlpha)) {
+        spdlog::critical("M2FittsRobotHuman: {} table {} could not be read. Set its repeats to 0 to run without it.",
+                         label, file);
+        return false;
+    }
+    for (auto &t : rows) {
+        if (hasAlpha) {
+            if (!std::isfinite(t.alpha) || t.alpha < 0. || t.alpha > 1.) {
+                spdlog::critical("M2FittsRobotHuman: {} table {}: alpha = {} is not in [0, 1].", label, file, t.alpha);
+                return false;
+            }
+        } else if (!lookupAlpha(t.ID_bits, t.alpha)) {
+            spdlog::critical("M2FittsRobotHuman: {}: ID {:.4f} bits has no alpha - {} has no alpha column and that ID "
+                             "does not occur in the block table.",
+                             label, t.ID_bits, file);
+            return false;
+        }
+    }
+
+    int n = 1;
+    for (int r = 1; r <= repeats; r++) {
+        for (size_t i = 0; i < rows.size(); i++) {
+            FittsTrial t = rows[i];
+            t.round = r;
+            t.inRound = (int)i + 1;
+            t.index = n++;
+            trials.push_back(t);
+        }
+    }
+    std::string alphas;
+    for (size_t i = 0; i < rows.size(); i++) alphas += (i ? ", " : "") + num(rows[i].alpha, 2);
+    spdlog::info("M2FittsRobotHuman: {}: {} trials from {} ({} rows x {} pass(es)); alpha order: {}.", label,
+                 trials.size(), file, rows.size(), repeats, alphas);
+    return !trials.empty();
+}
+
 bool M2FittsRobotHumanMachine::checkTrialTable() {
     bool ok = true;
     //1. Index of difficulty consistency: ID = log2(A/W + 1)
@@ -675,7 +739,7 @@ bool M2FittsRobotHumanMachine::openResultsFile() {
 void M2FittsRobotHumanMachine::writeResultRow(const FittsTrialResult &r) {
     if (!resultsFile_.is_open()) return;
     resultsFile_ << participant_ << "," << block_ << ","
-                 << "block" << ","
+                 << (r.phase == PHASE_WARMUP ? "warmup" : (r.phase == PHASE_COOLDOWN ? "cooldown" : "block")) << ","
                  << r.trial.round << "," << r.trial.inRound << "," << r.trial.index << ","
                  << num(r.trial.A_cm, 4) << "," << num(r.trial.W_cm, 6) << "," << num(r.trial.ID_bits, 4) << "," << num(r.x_start_cm, 4) << ","
                  << num(r.MT, 4) << "," << num(r.RT, 4) << "," << num(r.MT_move, 4) << ","
@@ -708,6 +772,8 @@ bool M2FittsRobotHumanMachine::writeParametersFile(const std::string &file) cons
       << "trials_dir: " << trialsDir_ << "\n"
       << "trials_prefix: " << trialsPrefix_ << "\n"
       << "trials_file: " << (trialsFile_.empty() ? std::string("(none - one file per round)") : trialsFile_) << "\n"
+      << "warmup_table: " << (params_.warmupRepeats > 0 ? warmupFile_ : std::string("(none)")) << "\n"
+      << "cooldown_table: " << (params_.cooldownRepeats > 0 ? cooldownFile_ : std::string("(none)")) << "\n"
       << "results_file: " << resultsPath_ << "\n"
       << "raw_log_file: " << rawPath_ << "\n"
       << "\n# Task axis x: u = alpha*u_r + (1-alpha)*u_h, realised as F_cmd,x = alpha*F_pd,x - alpha*k_h*F_h,x\n"
@@ -754,11 +820,25 @@ bool M2FittsRobotHumanMachine::writeParametersFile(const std::string &file) cons
       << " away_settle_speed=" << p.awaySettleSpeed << " max_move_extra_time=" << p.maxMoveExtraTime << "\n"
       << "breaks: every " << p.trialsPerRound << " trials, " << p.roundBreakTime << " s (a go cannot end one before "
       << p.roundBreakMinTime << " s), ready_hold=" << p.readyHoldTime << "\n"
-      << "structure: n_rounds=" << p.nRounds << " trials_per_round=" << p.trialsPerRound << " warm-up=none\n"
+      << "structure: n_rounds=" << p.nRounds << " trials_per_round=" << p.trialsPerRound
+      << " warmup_trials=" << warmupTrials_.size() << " cooldown_trials=" << cooldownTrials_.size()
+      << " warmup_rest=" << p.warmupRestTime << " cooldown_rest=" << p.cooldownRestTime
+      << " warmup_require_go=" << (p.warmupRequireGo ? "true" : "false")
+      << " cooldown_require_go=" << (p.cooldownRequireGo ? "true" : "false")
+      << " require_go_each_sub_block=" << (p.requireGoEachSubBlock ? "true" : "false") << "\n"
       << "ui: bind_ip=" << bindIP_ << " port=" << serverPort_ << " required=" << (uiRequired_ ? "true" : "false")
       << " divider=" << uiDivider_ << " display_gain=" << displayGain_ << "\n"
       << "\n# Autonomy level per ID (block tables)\n";
     for (const auto &e : alphaTable_) f << "alpha_ID_" << num(e.first, 4) << ": " << num(e.second, 6) << "\n";
+    for (int k = 0; k < 2; k++) {
+        const std::vector<FittsTrial> &list = (k == 0) ? warmupTrials_ : cooldownTrials_;
+        const char *label = (k == 0) ? "warmup" : "cooldown";
+        if (list.empty()) continue;
+        f << "\n# " << label << " sequence: A_cm, W_cm, ID_bits, alpha\n";
+        for (const auto &t : list)
+            f << label << ": " << num(t.A_cm, 4) << ", " << num(t.W_cm, 6) << ", " << num(t.ID_bits, 4) << ", "
+              << num(t.alpha, 4) << "\n";
+    }
     return f.good();
 }
 
@@ -766,7 +846,10 @@ bool M2FittsRobotHumanMachine::writeParametersFile(const std::string &file) cons
  * Protocol sequencing (Block 1)
  ******************************************************************************/
 void M2FittsRobotHumanMachine::setCurrentTrial() {
-    if (phase_ == PHASE_BLOCK && trialIdx_ < blockTrials_.size()) currentTrial_ = blockTrials_[trialIdx_];
+    const std::vector<FittsTrial> &list = (phase_ == PHASE_WARMUP)     ? warmupTrials_
+                                          : (phase_ == PHASE_COOLDOWN) ? cooldownTrials_
+                                                                       : blockTrials_;
+    if (phase_ != PHASE_DONE && trialIdx_ < list.size()) currentTrial_ = list[trialIdx_];
 }
 
 void M2FittsRobotHumanMachine::recordReach(const FittsTrialResult &r) {
@@ -782,10 +865,33 @@ void M2FittsRobotHumanMachine::finaliseTrial(double returnTime, bool timedOut, b
     trialsDone_++;
 
     trialIdx_++;
-    if (phase_ == PHASE_BLOCK) {
-        if (trialIdx_ >= blockTrials_.size()) {
+    if (phase_ == PHASE_WARMUP) {
+        if (trialIdx_ >= warmupTrials_.size()) {                //warm-up over: rest, then the block
+            phase_ = PHASE_BLOCK;
+            trialIdx_ = 0;
+            breakDue_ = true;
+            breakDuration_ = params_.warmupRestTime;
+            spdlog::info("M2FittsRobotHuman: warm-up completed ({} trials). Rest (up to {} s), then Block {}.",
+                         warmupTrials_.size(), params_.warmupRestTime, block_);
+        }
+    } else if (phase_ == PHASE_COOLDOWN) {
+        if (trialIdx_ >= cooldownTrials_.size()) {
             phase_ = PHASE_DONE;
+            spdlog::info("M2FittsRobotHuman: cool-down completed ({} trials).", cooldownTrials_.size());
+        }
+    } else if (phase_ == PHASE_BLOCK) {
+        if (trialIdx_ >= blockTrials_.size()) {
             spdlog::info("M2FittsRobotHuman: Block {} completed ({} trials).", block_, blockTrials_.size());
+            if (!cooldownTrials_.empty()) {                     //rest, then the cool-down sub-block
+                phase_ = PHASE_COOLDOWN;
+                trialIdx_ = 0;
+                breakDue_ = true;
+                breakDuration_ = params_.cooldownRestTime;
+                spdlog::info("M2FittsRobotHuman: rest (up to {} s), then the cool-down ({} trials).",
+                             params_.cooldownRestTime, cooldownTrials_.size());
+            } else {
+                phase_ = PHASE_DONE;
+            }
         } else if (params_.trialsPerRound > 0 && trialIdx_ % (size_t)params_.trialsPerRound == 0) {
             //A break after every trials_per_round finished trials (Block 1's 45-trial rounds), whatever the file layout
             breakDue_ = true;
@@ -840,7 +946,7 @@ std::vector<double> M2FittsRobotHumanMachine::sessionDescriptor() const {
             (double)block_,
             (double)params_.nRounds,
             (double)params_.trialsPerRound,
-            0.,  //number of warm-up trials: none in Block 2 (field kept: wire protocol)
+            (double)warmupTrials_.size(),  //shown by the display in its start-up instruction
             params_.originX,
             params_.originY,
             params_.taskDirection,
@@ -911,7 +1017,9 @@ void M2FittsRobotHumanMachine::init() {
         spdlog::warn("M2FittsRobotHuman: command_f_max ({} N) < f_max + cancel_f_max + stiction_comp ({} N): the command "
                      "cap can clip the blend.",
                      blend_.cmdFMax, pdGains_.f_max + blend_.cancelFMax + blend_.robotStictionComp);
-    if (!loadTrialTable() || !buildAlphaTable()) {
+    if (!loadTrialTable() || !buildAlphaTable() ||
+        !loadSubBlock(warmupFile_, params_.warmupRepeats, warmupTrials_, "warm-up") ||
+        !loadSubBlock(cooldownFile_, params_.cooldownRepeats, cooldownTrials_, "cool-down")) {
         spdlog::critical("M2FittsRobotHuman: trial/alpha tables could not be loaded ({}). Exiting...",
                          trialsFile_.empty() ? "trials_dir = " + trialsDir_ : "trials_file = " + trialsFile_);
         std::raise(SIGTERM);
@@ -931,13 +1039,14 @@ void M2FittsRobotHumanMachine::init() {
     else
         spdlog::info("M2FittsRobotHuman: parameters -> {}", paramsPath_);
 
-    phase_ = PHASE_BLOCK;  //no warm-up in Block 2: the first trial is trial 1 of round 1
+    phase_ = warmupTrials_.empty() ? PHASE_BLOCK : PHASE_WARMUP;
     trialIdx_ = 0;
     setCurrentTrial();
     fhFilter_.setCutoff(humanForceFilterHz_);
 
-    spdlog::info("M2FittsRobotHuman: participant {}, block {}: {} trials in {} rounds, no warm-up (shared control).",
-                 participant_, block_, blockTrials_.size(), params_.nRounds);
+    spdlog::info("M2FittsRobotHuman: participant {}, block {}: {} warm-up + {} block trials ({} rounds) + {} cool-down trials (shared control).",
+                 participant_, block_, warmupTrials_.size(), blockTrials_.size(), params_.nRounds,
+                 cooldownTrials_.size());
     {
         const size_t every = (size_t)std::max(1, params_.trialsPerRound);
         std::string at;

@@ -120,7 +120,8 @@ BlendOutput SharedControlLaw::compute(double alpha, const Vec2 &xRef, const Vec2
     }
 
     // Blend on x; Block 1 channel on y
-    double fx = robot + cancel;
+    //double fx = robot + cancel;
+    double fx = Fh(0) + alpha*(o.F_pd(0) - Fh(0)) + o.F_stiction;
     o.cmdSaturated = clampAbs(fx, p_.cmdFMax);
     o.F_cmd = Vec2(fx, channelForce(p_, xRef(1), x(1), v(1)));
     o.valid = true;
