@@ -12,7 +12,7 @@ from scipy.stats import linregress
 # Human CSV
 # ------------------------------------------------------------
 
-human_csv = r"logs/M2FittsHuman_P05_B1_20260924-150543_trials.csv"
+human_csv = r"logs/M2FittsHuman_P06_B1_20260924-173601_trials.csv"
 
 # Human:
 #   A   -> A_cm

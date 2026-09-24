@@ -8,9 +8,9 @@ from scipy.stats import linregress, t as t_dist
 # USER SETTINGS
 # ============================================================
 
-human_csv  = r"logs/M2FittsHuman_P05_B1_20260924-150543_trials.csv"
+human_csv  = r"logs/M2FittsHuman_P06_B1_20260924-173601_trials.csv"
 robot_csv  = r"logs/M2Fitts_20260922_120830_trials.csv"
-shared_csv = r"logs/M2FittsRobotHuman_P05_B2_20260924-154050_trials.csv"
+shared_csv = r"logs/M2FittsRobotHuman_P06_B2_20260924-180826_trials.csv"
 
 # Block 2 run again with the participant NOT taking part in the reach (they only drag the handle back to the
 # origin): the robot's share alone, alpha*u_r. Many trials end as misses; only successful ones are analysed.
