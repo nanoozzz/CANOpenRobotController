@@ -8,14 +8,14 @@ from scipy.stats import linregress, t as t_dist
 # USER SETTINGS
 # ============================================================
 
-human_csv  = r"logs/M2FittsHuman_P0j_B1_20260922-144435_trials.csv"
+human_csv  = r"logs/M2FittsHuman_P05_B1_20260924-150543_trials.csv"
 robot_csv  = r"logs/M2Fitts_20260922_120830_trials.csv"
-shared_csv = r"logs/M2FittsRobotHuman_P0j_B2_20260922-151835_trials.csv"
+shared_csv = r"logs/M2FittsRobotHuman_P05_B2_20260924-154050_trials.csv"
 
 # Block 2 run again with the participant NOT taking part in the reach (they only drag the handle back to the
 # origin): the robot's share alone, alpha*u_r. Many trials end as misses; only successful ones are analysed.
 # Set to None to skip everything related to this file.
-solo_csv   = r"logs/M2FittsRobotHuman_P0j_B2_20260922-172801_trials.csv"
+solo_csv   = None #r"logs/M2FittsRobotHuman_P0j_B2_20260922-172801_trials.csv"
 
 # Column mapping for each dataset
 #   A, W    : used to RECOMPUTE ID = log2(A/W + 1), so the three files are
